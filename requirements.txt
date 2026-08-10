@@ -1,0 +1,56 @@
+PyQt6>=6.6.0
+requests>=2.31.0
+
+# conversion_engine/ -- image convert/resize/compress backend (BETA 0.3.41).
+# Pure-Python wheels on every platform, no native build step, no extra
+# system dependency -- same "cheap, zero-friction install" bar as everything
+# else in this file.
+Pillow>=10.0.0
+
+# graph_router.py -- the primary command router (tried before any LLM
+# call). No longer optional: it's how MAKE_FOLDER-style intents AND all
+# 284 dispatchable windows_command_library commands get matched.
+kuzu>=0.11.0
+
+# app_control.py imports these for cursor/keyboard control (Windows only).
+# Missing from this file before -- anyone installing fresh from
+# requirements.txt would silently get _PYWINAUTO_AVAILABLE = False and
+# every APP_CONTROL click/type action would report "Cursor control isn't
+# available", with no indication that it's just a missing pip install.
+pywinauto>=0.6.8; sys_platform == 'win32'
+comtypes>=1.2.0; sys_platform == 'win32'
+
+# tests/ -- pure-Python regression suite (no Windows/Ollama needed), see
+# tests/README.md. Not needed to RUN the app, only to run the test suite.
+pytest>=7.0.0
+
+# voice_pipeline.py -- local/offline wake-word + speech-to-text.
+# openwakeword: wake-word detection (ships its own pretrained ONNX
+#   models + onnxruntime, CPU-only, no torch pulled in by its base
+#   install -- checked directly against its PyPI dependency metadata
+#   before choosing it).
+# faster-whisper: transcription (ctranslate2 backend, CPU-only int8,
+#   also no torch pulled in by its base install).
+# sounddevice: microphone capture. On Windows its wheel bundles the
+#   PortAudio DLL, so nothing extra to install there (unlike the Linux
+#   dev sandbox this was verified in, which needed `apt-get install
+#   libportaudio2` separately for the *runtime* library -- not an issue
+#   on the actual Windows target).
+# Deliberately NOT `silero-vad` (the official pip package) -- it
+# hard-requires torch>=1.12 + torchaudio>=0.12 even in "onnx" mode.
+# voice_pipeline.py downloads the raw ~2MB Silero VAD ONNX model once
+# and runs it directly via onnxruntime instead (already a dependency of
+# openwakeword/faster-whisper below, so this adds no new package for
+# that piece specifically).
+openwakeword>=0.4.0
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+
+# toki_desktop_mark.py / voice_pipeline.py -- global Ctrl+K hotkey listener.
+# Missing from this file before -- anyone installing fresh from
+# requirements.txt would silently get "[TOKI] pynput not installed --
+# Ctrl+K hotkey disabled." with no indication that it's just a missing
+# pip install (confirmed live: fresh venv, hotkey silently dead, only a
+# printed console line -- easy to miss since TOKI has no visible console
+# window in normal use).
+pynput>=1.7.6

@@ -1,0 +1,25 @@
+{
+  "id": "example_plugin",
+  "name": "Example Plugin",
+  "version": "1.0.0",
+  "description": "A minimal working example for plugin authors. Shows how to define custom intents and phrasings.",
+  "author": "TOKI Community",
+  "danger_level": "safe",
+  "intents": {
+    "PLUGIN_HELLO": {
+      "description": "Say hello from a plugin",
+      "kind": "chat",
+      "template": "echo Hello from TOKI plugin!",
+      "slots": [],
+      "reversible": true
+    }
+  },
+  "phrasings": {
+    "PLUGIN_HELLO": [
+      "hello from plugin",
+      "plugin say hello",
+      "greet from plugin",
+      "test plugin hello"
+    ]
+  }
+}

@@ -1,0 +1,390 @@
+"""
+voice_pipeline.py  --  Ctrl+K hotkey → VAD → faster-whisper transcription.
+
+WHAT CHANGED FROM THE WAKE-WORD VERSION
+----------------------------------------
+Wake word (openWakeWord) is gone entirely.  The trigger is now Ctrl+K,
+handled by toki_desktop_mark._run_listener() via pynput and forwarded
+here as extend_listening() calls.
+
+Everything else is the same pipeline:
+  · Silero VAD (raw ONNX, no torch) decides when you've stopped talking
+  · faster-whisper (tiny.en, int8, CPU) transcribes the utterance
+  · speech_transcribed(text) feeds into orchestrator.process_request()
+    exactly as a typed message would -- voice is not a separate code path
+    past that point.
+
+CTRL+K KEEP-ALIVE BEHAVIOUR
+----------------------------
+Each Ctrl+K press (while recording is active) calls extend_listening().
+That resets a silence hangover timer, so the pipeline keeps listening
+even if you paused between phrases.  Stop pressing Ctrl+K and stop
+talking → silence timer runs out → transcription fires.
+
+If you press Ctrl+K when the pipeline is idle it starts a fresh capture
+session.  If it's already capturing, it extends.  No duplicate sessions.
+
+INSTALL
+-------
+    pip install pynput faster-whisper sounddevice onnxruntime
+
+openWakeWord is no longer needed.
+"""
+
+from __future__ import annotations
+
+import queue
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+from PyQt6.QtCore import QThread, pyqtSignal
+
+# ── audio / VAD constants ────────────────────────────────────────────────────
+
+SAMPLE_RATE        = 16_000
+VAD_FRAME_SAMPLES  = 512        # ~32 ms @ 16 kHz (Silero VAD contract)
+VAD_THRESHOLD      = 0.45       # speech probability above this = "talking"
+SILENCE_HANGOVER_S = 1.8        # seconds of silence before we transcribe
+                                 # (reset on each Ctrl+K extend)
+MAX_UTTERANCE_S    = 45.0       # hard cap on a single recording
+NO_SPEECH_TIMEOUT_S = 6.0      # give up if VAD never sees speech at all
+
+_SILERO_URL  = (
+    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+)
+_SILERO_PATH = Path.home() / ".toki" / "silero_vad.onnx"
+_WHISPER_MODEL = "tiny.en"
+
+
+# ── extend_listening: called by the hotkey handler ───────────────────────────
+# Module-level so toki_desktop_mark.py can import it without a circular dep.
+
+_extend_event: threading.Event = threading.Event()
+
+
+def extend_listening() -> None:
+    """
+    Reset the silence hangover timer inside an active capture session.
+    Callable from any thread.  No-op if the pipeline is not capturing.
+    """
+    _extend_event.set()
+
+
+# ── Silero VAD wrapper ───────────────────────────────────────────────────────
+
+class _SileroVAD:
+    """
+    Thin wrapper around the raw Silero VAD ONNX model.
+    Downloads the model once on first use (~2 MB).
+    """
+
+    def __init__(self):
+        self._session = None
+        self._state   = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros(0, dtype=np.float32)
+
+    def _ensure_loaded(self):
+        if self._session is not None:
+            return
+        _SILERO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if not _SILERO_PATH.exists():
+            print("[TOKI-VAD] Downloading Silero VAD model (~2 MB)…")
+            try:
+                urllib.request.urlretrieve(_SILERO_URL, _SILERO_PATH)
+                print("[TOKI-VAD] Download complete.")
+            except Exception as exc:
+                raise RuntimeError(f"[TOKI-VAD] Could not download Silero VAD: {exc}")
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+        self._session = ort.InferenceSession(str(_SILERO_PATH), sess_options=opts)
+
+    def reset(self):
+        self._state   = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros(0, dtype=np.float32)
+
+    def speech_prob(self, frame_f32: np.ndarray) -> float:
+        """
+        frame_f32: float32 array of VAD_FRAME_SAMPLES samples, range [-1, 1].
+        Returns speech probability in [0, 1].
+        """
+        self._ensure_loaded()
+        # Silero needs a leading context of 64 samples; carry between frames.
+        ctx_len = 64
+        x = np.concatenate([self._context, frame_f32])[-ctx_len - VAD_FRAME_SAMPLES:]
+        inp = x[-VAD_FRAME_SAMPLES:][np.newaxis, :]   # (1, 512)
+        sr  = np.array(SAMPLE_RATE, dtype=np.int64)
+        out = self._session.run(None, {
+            "input":       inp,
+            "state":       self._state,
+            "sr":          sr,
+        })
+        prob            = float(out[0].squeeze())
+        self._state     = out[1]
+        self._context   = x[-ctx_len:]
+        return prob
+
+
+# ── HotkeyVoicePipeline ──────────────────────────────────────────────────────
+
+class HotkeyVoicePipeline(QThread):
+    """
+    Runs in a background QThread.  Waits for Ctrl+K (signalled via the
+    module-level _extend_event / a separate start event), then captures
+    audio until silence.
+
+    Signals
+    -------
+    listening_started   -- first audio frame captured
+    speech_transcribed  -- (str) text ready to dispatch
+    no_speech_detected  -- Ctrl+K was pressed but no actual speech was heard
+    unavailable         -- (str) setup failed, reason given
+    """
+
+    listening_started  = pyqtSignal()
+    speech_transcribed = pyqtSignal(str)
+    no_speech_detected = pyqtSignal()
+    unavailable        = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # NOTE: no setDaemon() here -- QThread has no such method (that's
+        # threading.Thread-only API and calling it here raised
+        # AttributeError unconditionally, confirmed directly). Clean
+        # shutdown is already handled by main_widget.py's _on_quit calling
+        # stop_pipeline() before the app quits, so nothing else is needed.
+
+        self._stop_flag    = threading.Event()
+        self._trigger      = threading.Event()   # set by on_hotkey_trigger()
+        self._audio_q: queue.Queue[np.ndarray] = queue.Queue()
+        self._capturing    = False
+        self._stream       = None   # sounddevice InputStream
+        self._vad          = _SileroVAD()
+        self._whisper      = None
+
+    # ── called by the hotkey handler in toki_desktop_mark ───────────────────
+
+    def on_hotkey_trigger(self) -> None:
+        """
+        Called (from any thread) whenever Ctrl+K fires.
+        · If not yet capturing → starts a new session.
+        · If already capturing → extends the silence window (same as
+          calling extend_listening()).
+        """
+        if self._capturing:
+            extend_listening()
+        else:
+            self._trigger.set()
+
+    # ── QThread.run ──────────────────────────────────────────────────────────
+
+    def run(self) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError:
+            self.unavailable.emit(
+                "sounddevice not installed. Run: pip install sounddevice"
+            )
+            return
+
+        try:
+            self._whisper = self._load_whisper()
+        except Exception as exc:
+            self.unavailable.emit(f"faster-whisper load failed: {exc}")
+            return
+
+        def _audio_callback(indata, frames, t, status):
+            if self._capturing:
+                self._audio_q.put(indata[:, 0].copy())
+
+        try:
+            self._stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=VAD_FRAME_SAMPLES,
+                callback=_audio_callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            self.unavailable.emit(f"Microphone not available: {exc}")
+            return
+
+        print("[TOKI-Voice] Ready.  Press Ctrl+K to speak.")
+
+        try:
+            while not self._stop_flag.is_set():
+                triggered = self._trigger.wait(timeout=0.5)
+                if not triggered:
+                    continue
+                self._trigger.clear()
+                self._record_and_transcribe()
+        finally:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+
+    def stop_pipeline(self) -> None:
+        self._stop_flag.set()
+        self._trigger.set()   # unblock .wait()
+        self.wait(3000)
+
+    # ── capture → transcribe ─────────────────────────────────────────────────
+
+    def _record_and_transcribe(self) -> None:
+        """
+        Capture audio until:
+          · SILENCE_HANGOVER_S of silence (not reset by Ctrl+K or speech), OR
+          · MAX_UTTERANCE_S hard cap, OR
+          · NO_SPEECH_TIMEOUT_S without any detected speech.
+        """
+        # BETA 0.3.28 fix (restored 0.3.31 -- an intervening edit had moved
+        # this back to running AFTER the drain/vad-reset/extend_event.clear()
+        # below, i.e. the exact original bug ordering, with a comment
+        # claiming otherwise. Verified live that this reopened the race:
+        # hooking _vad.reset() and firing on_hotkey_trigger() at that point
+        # showed self._capturing still False, extend_listening() NOT
+        # called, and self._trigger.set() fired instead -- the original bug,
+        # reproduced exactly. Moving this back to the top and confirming
+        # again below.):
+        #
+        # on_hotkey_trigger() (called from the pynput listener thread,
+        # entirely independent of this one) checks self._capturing to
+        # decide "start a new session" vs "extend the current one". If a
+        # Ctrl+K press landed in the window between run()'s
+        # self._trigger.clear() and this line, on_hotkey_trigger() saw
+        # False and called self._trigger.set() again instead of
+        # extend_listening() -- but run()'s while loop won't check
+        # self._trigger again until THIS session's
+        # _record_and_transcribe() call returns, so that keypress didn't
+        # extend anything -- it just sat there and, once this session
+        # ended for an unrelated reason, immediately kicked off a brand
+        # new recording session instead of the silence-extension the user
+        # actually asked for.
+        #
+        # Fix: set self._capturing = True FIRST, before the drain/reset,
+        # so on_hotkey_trigger() can never observe a stale False while a
+        # session is genuinely already underway. Deliberately accepted
+        # trade-off: the audio callback (_audio_callback) now also gates
+        # on self._capturing, so it's technically possible for it to
+        # enqueue one live ~tens-of-ms audio frame WHILE the drain loop
+        # below is still clearing out the previous session's stale
+        # frames, and for that one frame to get swept up in the drain
+        # too. That's a single frame of audio at the very start of a
+        # session, not a lost keypress/session -- a strictly smaller and
+        # far less user-visible cost than the race being fixed here.
+        self._capturing = True
+
+        # drain stale audio from queue
+        while not self._audio_q.empty():
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
+
+        self._vad.reset()
+        _extend_event.clear()
+
+        recorded           = np.zeros(0, dtype=np.int16)
+        vad_buf            = np.zeros(0, dtype=np.int16)
+        heard_speech       = False
+        last_speech_t      = time.monotonic()
+        session_start_t    = last_speech_t
+
+        self.listening_started.emit()
+
+        while not self._stop_flag.is_set():
+            now = time.monotonic()
+
+            # hard cap
+            if now - session_start_t > MAX_UTTERANCE_S:
+                break
+
+            # no-speech timeout
+            if not heard_speech and (now - session_start_t) > NO_SPEECH_TIMEOUT_S:
+                self._capturing = False
+                self.no_speech_detected.emit()
+                return
+
+            # silence hangover (only after we've heard something)
+            if heard_speech and (now - last_speech_t) > SILENCE_HANGOVER_S:
+                # Check if Ctrl+K extended us
+                if _extend_event.is_set():
+                    _extend_event.clear()
+                    last_speech_t = time.monotonic()   # reset the clock
+                    continue
+                break   # genuine silence end → transcribe
+
+            # collect audio
+            try:
+                chunk = self._audio_q.get(timeout=0.3)
+            except queue.Empty:
+                # while waiting, still check for extend
+                if _extend_event.is_set() and heard_speech:
+                    _extend_event.clear()
+                    last_speech_t = time.monotonic()
+                continue
+
+            recorded = np.append(recorded, chunk)
+            vad_buf  = np.append(vad_buf, chunk)
+
+            # run VAD on complete frames
+            while len(vad_buf) >= VAD_FRAME_SAMPLES:
+                frame   = vad_buf[:VAD_FRAME_SAMPLES]
+                vad_buf = vad_buf[VAD_FRAME_SAMPLES:]
+                frame_f = frame.astype(np.float32) / 32768.0
+                try:
+                    prob = self._vad.speech_prob(frame_f)
+                except Exception:
+                    prob = 0.0
+                if prob >= VAD_THRESHOLD:
+                    heard_speech  = True
+                    last_speech_t = time.monotonic()
+
+        self._capturing = False
+
+        if not heard_speech or len(recorded) == 0:
+            self.no_speech_detected.emit()
+            return
+
+        audio_f32 = recorded.astype(np.float32) / 32768.0
+        try:
+            segments, _info = self._whisper.transcribe(
+                audio_f32, language="en", beam_size=1
+            )
+            text = "".join(seg.text for seg in segments).strip()
+        except Exception as exc:
+            print(f"[TOKI-Voice] Transcription error: {exc}")
+            self.no_speech_detected.emit()
+            return
+
+        if text:
+            self.speech_transcribed.emit(text)
+        else:
+            self.no_speech_detected.emit()
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_whisper():
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise ImportError(
+                "faster-whisper not installed. Run: pip install faster-whisper"
+            )
+        cache_dir = Path.home() / ".toki" / "whisper"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[TOKI-Voice] Loading faster-whisper ({_WHISPER_MODEL}, int8, CPU)…")
+        model = WhisperModel(
+            _WHISPER_MODEL,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(cache_dir),
+        )
+        print("[TOKI-Voice] Whisper model ready.")
+        return model

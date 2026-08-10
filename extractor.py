@@ -9,11 +9,13 @@ removes the whole "model invents a wrong variable shape" failure class we
 kept hitting before.
 """
 
+import json
 import ntpath
 import os
 import re
 import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 
@@ -257,17 +259,59 @@ def _resolve_real_desktop_path() -> str:
     return _desktop_path_cache
 
 
+# The installer writes this file based on the drives/folders the user
+# picked during setup. Format: {"roots": ["D:\\", "E:\\Projects", ...]}.
+# Missing/unreadable/empty -> falls back to the original D:\ -only default
+# below, so a dev checkout or a manual `pip install` with no installer
+# involved behaves exactly like it always did.
+_SANDBOX_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "sandbox_config.json"
+_sandbox_config_roots_cache: Optional[List[str]] = None
+
+
+def _load_configured_sandbox_roots() -> List[str]:
+    """Reads the installer-written root list, once, cached for the process
+    lifetime (same "fetch once, cache" convention as apis.py's
+    LocationCache / app_control.py's installed-apps cache). Never raises --
+    any problem with the file just means "nothing configured"."""
+    global _sandbox_config_roots_cache
+    if _sandbox_config_roots_cache is not None:
+        return _sandbox_config_roots_cache
+
+    roots: List[str] = []
+    try:
+        with open(_SANDBOX_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw = data.get("roots")
+        if isinstance(raw, list):
+            roots = [ntpath.normpath(r) for r in raw if isinstance(r, str) and r.strip()]
+    except Exception:
+        roots = []
+
+    _sandbox_config_roots_cache = roots
+    return roots
+
+
 def get_sandbox_roots() -> List[str]:
     """
-    Only two trees are ever writable/readable: the non-Windows data drive
-    (D:\\) and the user's ACTUAL Desktop (resolved via Windows' known-folder
-    API, not assumed from %USERPROFILE%). Everything else on the Windows
-    drive is off-limits — no app-launching, no System32, no Program Files.
+    Every tree TOKI is allowed to touch. The real Desktop (resolved via
+    Windows' own known-folder API, not assumed from %USERPROFILE%) is
+    ALWAYS included -- that's the one root no installer choice can remove,
+    since it's the natural "just works, no setup" default. On top of that:
+    whatever drives/folders the installer's wizard page wrote to
+    config/sandbox_config.json, or a bare D:\\ if that file isn't present
+    at all (unconfigured dev checkout / manual install, matching this
+    project's original behavior before the installer existed).
 
     Uses ntpath explicitly (not os.path) since this app only ever runs on
     Windows, regardless of what platform it's developed/tested on.
     """
-    return [ntpath.normpath(r"D:\\"), _resolve_real_desktop_path()]
+    configured = _load_configured_sandbox_roots()
+    roots = configured if configured else [ntpath.normpath(r"D:\\")]
+
+    desktop = _resolve_real_desktop_path()
+    if not any(r.lower() == desktop.lower() for r in roots):
+        roots.append(desktop)
+    return roots
 
 
 def is_within_sandbox(path: str) -> bool:

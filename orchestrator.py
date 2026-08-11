@@ -732,6 +732,14 @@ class _ThinkingHandle:
         self._thread.join(timeout=timeout)
         return self._result.get("text", "")
 
+    def error(self, timeout: float = 30) -> Optional[str]:
+        """Call AFTER join() (or with the same timeout, results are cached
+        on the same dict). Returns the raw router-level error string
+        ("Can't reach Ollama...", "Ollama timed out.", etc.) if the
+        underlying stream_thinking() call failed, else None."""
+        self._thread.join(timeout=timeout)
+        return self._result.get("error")
+
 
 class OllamaRouter:
     """Talks to a local Ollama instance using schema-constrained decoding, twice per turn."""
@@ -1448,7 +1456,32 @@ class WindowsAIAssistant:
         to build their response, with no dispatch work to run in parallel).
         """
         handle = self._start_thinking(user_prompt, decision_context, on_thinking_token, history)
-        return handle.join() if handle else ""
+        if not handle:
+            return ""
+        text = handle.join()
+        # Every non-CHAT/ASK_CONTEXT path only ever reaches Ollama for
+        # narration on top of an already-decided action -- if that fails,
+        # _is_narration_grounded()'s fallback_meta branch already covers
+        # it with a grounded, factual sentence (see _start_thinking()).
+        # CHAT/ASK_CONTEXT and the defensive catch-all at the bottom of
+        # process_request() have no such fallback, since there's no
+        # action/result to narrate -- Ollama genuinely was the only way
+        # to answer. Without this, the user sees a blank reply exactly
+        # when the app most needed to explain what happened. Ollama is
+        # optional and TOKI is designed to rarely need it (Tier A/Tier B
+        # resolve most requests without any model call at all) -- this is
+        # the one honest message for the rare case it's actually needed
+        # and isn't there.
+        if not text and handle.error():
+            text = (
+                "I didn't get that. That needed my AI fallback (Ollama), "
+                "which isn't running or isn't reachable right now. Most of "
+                "what I do doesn't need it, but free-form chat and open-ended "
+                "questions do -- start Ollama and try again."
+            )
+            if on_thinking_token:
+                on_thinking_token(text)
+        return text
 
     def _check_destructive_shadow(self, intent: str, user_prompt: str) -> Optional[str]:
         """priority.md #11: returns a clarifying question if `intent` (a

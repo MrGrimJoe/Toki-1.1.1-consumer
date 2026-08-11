@@ -1,0 +1,7 @@
+{
+  "_comment": "Rename this file to sandbox_config.json (in this same 'config' folder, next to extractor.py) to control which folders TOKI is allowed to touch. Written automatically by the installer based on what the user picks during setup -- this file is just the reference format for building that installer. 'roots' is a list of Windows paths; the real Desktop is always included automatically on top of whatever's listed here, so it doesn't need to be repeated.",
+  "roots": [
+    "D:\\",
+    "C:\\Users\\Example\\Documents"
+  ]
+}

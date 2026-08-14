@@ -73,8 +73,13 @@ def compress_file(source_path: str, quality: int = 60, overwrite: bool = False) 
     source = _check_exists(source_path)
     source_ext = source.suffix.lstrip(".")
     backend = backend_for(source_ext, "compress")
-    if source.is_dir() or source_ext not in {"png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "tif", "ico"}:
-        # Non-image sources (or whole folders) get zipped, not re-encoded.
+    from .registry import IMAGE_EXTS, MEDIA_EXTS
+
+    if source.is_dir() or (source_ext not in IMAGE_EXTS and source_ext not in MEDIA_EXTS):
+        # Non-image, non-media sources (or whole folders) get zipped, not
+        # re-encoded -- there's no meaningful "quality" knob for e.g. a
+        # .txt file, so archive_backend's compress() (bundled below) is
+        # the only sane fallback.
         return backend.compress(str(source), overwrite=overwrite)
     return backend.compress(str(source), quality=quality, overwrite=overwrite)
 
@@ -96,4 +101,6 @@ def supported_formats() -> dict:
         "text": sorted(registry.TEXT_EXTS),
         "document": sorted(registry.DOCUMENT_EXTS),
         "archive": sorted(registry.ARCHIVE_EXTS),
+        "audio": sorted(registry.AUDIO_EXTS),
+        "video": sorted(registry.VIDEO_EXTS),
     }

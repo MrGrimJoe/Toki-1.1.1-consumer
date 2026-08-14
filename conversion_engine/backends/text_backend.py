@@ -1,6 +1,6 @@
 """
 text_backend.py — stdlib-only conversions between plain-text data formats:
-txt, md, csv, tsv, json, yaml, yml, xml, log.
+txt, md, csv, tsv, json, yaml, yml, xml, log, ini, toml, conf.
 
 Covers the feature request's headline example directly:
   "turn the file I'm selecting into a text file" (json -> txt, csv -> txt,
@@ -8,7 +8,7 @@ Covers the feature request's headline example directly:
 
 DESIGN NOTES
 ----------------------------------------------------------------------------
-- json/csv/tsv have real STRUCTURE, so "convert to txt" means "render
+- json/csv/tsv/ini have real STRUCTURE, so "convert to txt" means "render
   readably", not "byte-copy with a new extension" -- that distinction is
   made explicit per pair below rather than silently flattening everything
   through str(). A target this module has no real transform for (e.g.
@@ -23,12 +23,22 @@ DESIGN NOTES
   traceback, this raises a clear, specific message the same way
   document_backend.py does for a missing pandoc -- consistent with this
   project's "a miss is a clear no, never a guess" posture.
+- ini/toml/conf (BETA 0.3.43): ini and conf are treated identically
+  (Windows .conf files are near-universally INI-shaped) via stdlib
+  configparser -- a real structured round-trip to/from json, same as
+  csv/tsv already get, not a byte-copy. toml has no stdlib WRITER before
+  Python 3.11 (only tomllib, read-only, added in 3.11) -- reading requires
+  tomllib (3.11+) or the third-party `toml` package on older runtimes;
+  writing always needs the third-party `toml` package. Both report a
+  specific missing-dependency message rather than silently no-op'ing,
+  same convention as _to_yaml()'s PyYAML check below.
 - Every writer defaults to UTF-8 and never overwrites the source in place
   (same suffix convention as image_backend.py), unless overwrite=True.
 """
 
 from __future__ import annotations
 
+import configparser
 import csv
 import io
 import json
@@ -75,6 +85,10 @@ def convert(source_path: str, target_ext: str, overwrite: bool = False) -> str:
             _write_tabular_from_records(data, out_path, delimiter="," if target_ext == "csv" else "\t")
         elif target_ext in ("yaml", "yml"):
             out_path.write_text(_to_yaml(data), encoding="utf-8")
+        elif target_ext in ("ini", "conf"):
+            out_path.write_text(_json_to_ini(data), encoding="utf-8")
+        elif target_ext == "toml":
+            out_path.write_text(_write_toml(data), encoding="utf-8")
         else:
             raise UnsupportedFormatError(
                 f"Can't convert json to {target_ext} -- no readable "
@@ -110,6 +124,47 @@ def convert(source_path: str, target_ext: str, overwrite: bool = False) -> str:
         else:
             raise UnsupportedFormatError(
                 f"Can't convert xml to {target_ext} -- no readable "
+                f"transform exists for that pair yet."
+            )
+        return str(out_path)
+
+    # ── ini/conf -> anything (BETA 0.3.43) — .conf treated as ini-shaped,
+    #    the common case on Windows/cross-platform config files. ─────────
+    if source_ext in ("ini", "conf"):
+        parser = configparser.ConfigParser()
+        parser.read_string(raw)
+        data = {section: dict(parser.items(section)) for section in parser.sections()}
+        if target_ext == "json":
+            out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        elif target_ext in ("ini", "conf"):
+            out_path.write_text(raw, encoding="utf-8")
+        elif target_ext in ("txt", "md", "log"):
+            out_path.write_text(_ini_data_to_plain(data), encoding="utf-8")
+        else:
+            raise UnsupportedFormatError(
+                f"Can't convert ini to {target_ext} -- no readable "
+                f"transform exists for that pair yet."
+            )
+        return str(out_path)
+
+    # ── json -> ini/conf/toml handled above in the "json -> anything"
+    #    branch directly (source_ext == "json" is checked first) — kept
+    #    unlisted here so there's exactly one place that decides json's
+    #    outgoing conversions, not two branches that could silently drift
+    #    out of sync with each other.
+
+    # ── toml -> anything (BETA 0.3.43) ───────────────────────────────────
+    if source_ext == "toml":
+        data = _read_toml(raw)
+        if target_ext == "json":
+            out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        elif target_ext == "toml":
+            out_path.write_text(raw, encoding="utf-8")
+        elif target_ext in ("txt", "md", "log"):
+            out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        else:
+            raise UnsupportedFormatError(
+                f"Can't convert toml to {target_ext} -- no readable "
                 f"transform exists for that pair yet."
             )
         return str(out_path)
@@ -173,3 +228,64 @@ def _to_yaml(data) -> str:
             "Add 'pyyaml' to requirements.txt to enable this."
         )
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+
+
+def _ini_data_to_plain(data: dict) -> str:
+    lines = []
+    for section, kv in data.items():
+        lines.append(f"[{section}]")
+        for k, v in kv.items():
+            lines.append(f"  {k} = {v}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _json_to_ini(data) -> str:
+    """Only a flat {section: {key: value}} shape maps cleanly onto ini's
+    section/key model -- anything else (a bare list, deeply nested
+    objects) has no unambiguous ini representation, so this raises rather
+    than inventing a lossy flattening scheme."""
+    if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+        raise UnsupportedFormatError(
+            "Can't convert this json to ini -- ini needs a flat "
+            "{section: {key: value}} shape, and this json isn't shaped "
+            "like that."
+        )
+    parser = configparser.ConfigParser()
+    for section, kv in data.items():
+        parser[section] = {k: str(v) for k, v in kv.items()}
+    buf = io.StringIO()
+    parser.write(buf)
+    return buf.getvalue()
+
+
+def _read_toml(raw: str):
+    try:
+        import tomllib  # Python 3.11+, stdlib, read-only
+        return tomllib.loads(raw)
+    except ImportError:
+        pass
+    try:
+        import toml  # type: ignore  # third-party, works on any version
+        return toml.loads(raw)
+    except ImportError:
+        raise RuntimeError(
+            "Reading TOML on this Python version needs the 'toml' "
+            "package (Python 3.11+ can read it out of the box via "
+            "stdlib tomllib, but this backend can also write TOML, "
+            "which tomllib can't do). Add 'toml' to requirements.txt to "
+            "enable this."
+        )
+
+
+def _write_toml(data) -> str:
+    try:
+        import toml  # type: ignore  # stdlib has no TOML writer at all, even on 3.11+
+        return toml.dumps(data)
+    except ImportError:
+        raise RuntimeError(
+            "Writing TOML needs the 'toml' package, which isn't "
+            "installed (there is no stdlib TOML writer, even on Python "
+            "3.11+ -- tomllib is read-only). Add 'toml' to "
+            "requirements.txt to enable this."
+        )

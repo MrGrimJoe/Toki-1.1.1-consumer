@@ -194,12 +194,13 @@ class MacroPlayer:
         if not events:
             return f"Macro \"{name}\" has no recorded steps."
 
-        try:
-            from pywinauto.mouse import click as mouse_click
-            from pywinauto.keyboard import send_keys
-        except ImportError:
+        import app_control
+
+        if not app_control._load_pywinauto():
             return "Cursor control isn't available on this system (pywinauto/UI Automation required)."
 
+        from pywinauto.mouse import click as mouse_click
+        from pywinauto.keyboard import send_keys
         from app_control import capture_identity_at_point, escape_for_send_keys
 
         prev_t = 0.0

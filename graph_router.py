@@ -163,6 +163,28 @@ STOPWORDS = {
     "a", "an", "the", "please", "me", "my", "can", "you", "could",
     "would", "to", "of", "for", "and", "is", "it", "this", "that",
     "on", "in", "at", "do", "i", "want", "need",
+    # BETA 0.3.47: interrogative/discourse fillers. These were content
+    # words before this change, which is the actual mechanism behind the
+    # "does 'mexico'/'capital' mean list files" class of bug (see
+    # FIXES_APPLIED_0.3.46.md) -- "what"/"does"/"mean" carry zero signal
+    # about WHICH command a user wants (no Tier A command is defined by
+    # them), but they DO show up in general-knowledge questions and
+    # greetings constantly, so leaving them as content words let coincidental
+    # overlap on a real command's phrasing text (e.g. "does" appearing in
+    # some other phrasing) manufacture a fake candidate out of pure noise.
+    # Confirmed directly: stripping these turns "what is the capital of
+    # mexico" and "what does mexico and capital mean" from a false
+    # LIST_FILES/PATH_EXISTS candidate into a genuine total miss (0
+    # dispatchable words), and does NOT break real command phrasings that
+    # happen to use these words too ("what's the weather" -> GET_WEATHER,
+    # "what's my ip address" -> NETWORK_INFO, "who am i logged in as" ->
+    # CURRENT_USER all still hit correctly) because those commands are
+    # carried by their own domain nouns (weather/ip/address/logged), not
+    # by the interrogative word itself.
+    "what", "why", "who", "when", "where", "which", "how",
+    "does", "did", "doing", "was", "were", "be", "been", "being",
+    "mean", "means", "meant",
+    "hi", "hello", "hey", "going", "there",
 }
 
 

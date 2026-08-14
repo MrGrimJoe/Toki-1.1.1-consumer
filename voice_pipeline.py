@@ -371,20 +371,213 @@ class HotkeyVoicePipeline(QThread):
 
     @staticmethod
     def _load_whisper():
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError:
-            raise ImportError(
-                "faster-whisper not installed. Run: pip install faster-whisper"
-            )
-        cache_dir = Path.home() / ".toki" / "whisper"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[TOKI-Voice] Loading faster-whisper ({_WHISPER_MODEL}, int8, CPU)…")
-        model = WhisperModel(
-            _WHISPER_MODEL,
-            device="cpu",
-            compute_type="int8",
-            download_root=str(cache_dir),
+        return _load_whisper_model()
+
+
+# ── continuous dictation ("start listening") ────────────────────────────────
+#
+# BETA 0.3.44 addition. HotkeyVoicePipeline above is single-utterance: one
+# Ctrl+K press captures ONE utterance, transcribes it, and hands it to
+# orchestrator.process_request() -- the normal classify/dispatch pipeline.
+# DictationPipeline is a different shape entirely: it keeps capturing
+# utterance after utterance in a loop, and each transcribed utterance is
+# typed directly into a target field (see app_control.py's
+# AppController.start_dictation()) -- it never goes through orchestrator's
+# classify/dispatch at all, by design. "whatever you say immediately starts
+# getting typed" only works if there's no per-utterance round-trip through
+# intent classification in between.
+#
+# Shares _SileroVAD and the whisper-loading logic with HotkeyVoicePipeline
+# (via the module-level _load_whisper_model() both now call) rather than
+# duplicating that setup -- everything else about the loop is intentionally
+# NOT shared, since "segment once and hand off" and "segment forever until
+# told to stop" are different enough control flows that trying to force them
+# through one shared method would have made both harder to follow than two
+# short, separate ones.
+
+def _load_whisper_model():
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise ImportError(
+            "faster-whisper not installed. Run: pip install faster-whisper"
         )
-        print("[TOKI-Voice] Whisper model ready.")
-        return model
+    cache_dir = Path.home() / ".toki" / "whisper"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[TOKI-Voice] Loading faster-whisper ({_WHISPER_MODEL}, int8, CPU)…")
+    model = WhisperModel(
+        _WHISPER_MODEL,
+        device="cpu",
+        compute_type="int8",
+        download_root=str(cache_dir),
+    )
+    print("[TOKI-Voice] Whisper model ready.")
+    return model
+
+
+class DictationPipeline(QThread):
+    """
+    Runs in its own background QThread, entirely separate from any
+    HotkeyVoicePipeline instance that may also be running (Ctrl+K keeps
+    working normally while dictation is active -- they use independent
+    sounddevice InputStreams, same as any two audio-consuming apps would).
+
+    Started by AppController.start_dictation() once a typing target has
+    been resolved; stopped by AppController.stop_dictation() (wired to the
+    widget's stop button in main_widget.py -- see toki_desktop_mark.py's
+    dictation panel). There is no silence-hangover auto-stop here on
+    purpose: HotkeyVoicePipeline's whole point is "one utterance, then
+    stop and process it"; dictation's whole point is "keep going until
+    the user says to stop", so a pause between sentences must NOT end the
+    session the way it would for a normal command.
+
+    Signals
+    -------
+    dictation_started     -- audio stream opened, actively listening
+    utterance_transcribed  -- (str) one finished utterance's text, emitted
+                              as soon as it's ready -- the caller types it
+                              immediately, no batching
+    dictation_stopped     -- stream closed, thread about to exit cleanly
+    unavailable           -- (str) setup failed, reason given
+    """
+
+    dictation_started    = pyqtSignal()
+    utterance_transcribed = pyqtSignal(str)
+    dictation_stopped     = pyqtSignal()
+    unavailable           = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop_flag = threading.Event()
+        self._audio_q: queue.Queue[np.ndarray] = queue.Queue()
+        self._capturing = False
+        self._stream = None
+        self._vad = _SileroVAD()
+        self._whisper = None
+
+    def stop(self) -> None:
+        """Callable from any thread (the Qt main thread, via the widget's
+        stop button click handler). Signals the run() loop to finish its
+        current segment check and exit -- does not hard-kill mid-utterance,
+        so at most one in-flight utterance still gets transcribed and typed
+        after stop() is called, never a torn/partial one."""
+        self._stop_flag.set()
+
+    def run(self) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError:
+            self.unavailable.emit(
+                "sounddevice not installed. Run: pip install sounddevice"
+            )
+            return
+
+        try:
+            self._whisper = _load_whisper_model()
+        except Exception as exc:
+            self.unavailable.emit(f"faster-whisper load failed: {exc}")
+            return
+
+        def _audio_callback(indata, frames, t, status):
+            if self._capturing:
+                self._audio_q.put(indata[:, 0].copy())
+
+        try:
+            self._stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=VAD_FRAME_SAMPLES,
+                callback=_audio_callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            self.unavailable.emit(f"Microphone not available: {exc}")
+            return
+
+        self._capturing = True
+        self.dictation_started.emit()
+        print("[TOKI-Dictation] Listening -- speak, and it'll be typed. Tap stop when done.")
+
+        try:
+            while not self._stop_flag.is_set():
+                text = self._capture_one_utterance()
+                if text:
+                    self.utterance_transcribed.emit(text)
+                # No text (silence/timeout) just loops back and keeps
+                # listening -- unlike HotkeyVoicePipeline, silence is not
+                # a stop condition here, only self._stop_flag is.
+        finally:
+            self._capturing = False
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+            self.dictation_stopped.emit()
+
+    def _capture_one_utterance(self) -> str:
+        """
+        Same VAD-segmentation shape as HotkeyVoicePipeline._record_and_
+        transcribe() (silence hangover ends a segment, a hard cap prevents
+        a runaway recording, an initial no-speech window returns early so
+        the outer loop can re-check self._stop_flag promptly) -- returns
+        "" instead of emitting a signal on a no-speech/empty result, so
+        the caller's loop can just check truthiness and keep going either
+        way. No Ctrl+K extend-listening concept here -- there's no
+        separate "extend" trigger in continuous dictation, the whole
+        point is that it never stops on its own.
+        """
+        while not self._audio_q.empty():
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
+        self._vad.reset()
+
+        recorded        = np.zeros(0, dtype=np.int16)
+        vad_buf         = np.zeros(0, dtype=np.int16)
+        heard_speech    = False
+        last_speech_t   = time.monotonic()
+        session_start_t = last_speech_t
+
+        while not self._stop_flag.is_set():
+            now = time.monotonic()
+
+            if now - session_start_t > MAX_UTTERANCE_S:
+                break
+            if not heard_speech and (now - session_start_t) > NO_SPEECH_TIMEOUT_S:
+                return ""
+            if heard_speech and (now - last_speech_t) > SILENCE_HANGOVER_S:
+                break
+
+            try:
+                chunk = self._audio_q.get(timeout=0.3)
+            except queue.Empty:
+                continue
+
+            recorded = np.append(recorded, chunk)
+            vad_buf = np.append(vad_buf, chunk)
+
+            while len(vad_buf) >= VAD_FRAME_SAMPLES:
+                frame = vad_buf[:VAD_FRAME_SAMPLES]
+                vad_buf = vad_buf[VAD_FRAME_SAMPLES:]
+                frame_f = frame.astype(np.float32) / 32768.0
+                try:
+                    prob = self._vad.speech_prob(frame_f)
+                except Exception:
+                    prob = 0.0
+                if prob >= VAD_THRESHOLD:
+                    heard_speech = True
+                    last_speech_t = time.monotonic()
+
+        if not heard_speech or len(recorded) == 0:
+            return ""
+
+        audio_f32 = recorded.astype(np.float32) / 32768.0
+        try:
+            segments, _info = self._whisper.transcribe(
+                audio_f32, language="en", beam_size=1
+            )
+            return "".join(seg.text for seg in segments).strip()
+        except Exception as exc:
+            print(f"[TOKI-Dictation] Transcription error: {exc}")
+            return ""

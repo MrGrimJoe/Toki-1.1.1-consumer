@@ -69,17 +69,45 @@ _NAME_RE = re.compile(
 )
 
 
+def extract_explicit_name(user_text: str) -> Optional[str]:
+    """
+    Just the "did the user actually give a name" half of what used to be
+    infer_filename() in one step -- split out (BETA 0.3.55) so
+    orchestrator.py can ask "what should I name it?" when this returns
+    None, instead of infer_filename() silently defaulting to
+    "generated_file" and the user never finding out no name was ever
+    heard. Returns the raw matched name text (not yet extension-decided),
+    or None if no "called X"/"named X" clause is present at all.
+
+    See infer_filename()'s own docstring update for the actual bug this
+    was written to close: GENERATE_FILE was the only file-creating intent
+    with no MISSING_SLOT_QUESTIONS entry and no ask-on-miss behavior --
+    every other one (MAKE_FOLDER, MAKE_FILE, ...) already asks. Silently
+    defaulting here specifically punished anyone whose trailing "call it
+    X" clause got cut off (slow talkers against voice_pipeline.py's
+    SILENCE_HANGOVER_S, or anyone who just paused before naming it) --
+    the file still got created, just as "generated_file.txt", with
+    nothing in the UI ever saying the name didn't come through.
+    """
+    m = _NAME_RE.search(user_text)
+    if not m:
+        return None
+    return (m.group(1) or m.group(2)).strip().rstrip(".,!") or None
+
+
 def infer_filename(user_text: str) -> str:
     """
     Pick a sandboxed filename for the generated content. Falls back to a
-    generic name + inferred extension if the user didn't give one -- this
-    function only ever produces a *name*, never file content, so there's
-    nothing here that needs model involvement.
+    generic name + inferred extension if the user didn't give one -- by
+    the time this is actually called (see orchestrator.py's `_dispatch`,
+    "generate" kind branch), the caller has ALREADY confirmed via
+    extract_explicit_name() that either a real name is present or the
+    user was asked and explicitly chose to skip -- so the "generic name"
+    fallback below is a deliberate, informed default now, not a silent
+    one. This function only ever produces a *name*, never file content,
+    so there's nothing here that needs model involvement.
     """
-    m = _NAME_RE.search(user_text)
-    base = None
-    if m:
-        base = (m.group(1) or m.group(2)).strip().rstrip(".,!")
+    base = extract_explicit_name(user_text)
 
     ext = ".txt"
     for pattern, candidate_ext in _LANGUAGE_EXTENSION_HINTS:

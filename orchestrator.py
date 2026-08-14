@@ -62,6 +62,8 @@ import json
 import ntpath
 import re
 import requests
+import threading
+import time
 from typing import Dict, Any, Optional, Callable, List
 
 from intents import INTENTS as _BASE_INTENTS
@@ -73,16 +75,21 @@ from categories import (
 )
 from extractor import (
     extract_slots, resolve_missing_slot, resolve_open_target, has_explicit_open_convention,
-    MISSING_SLOT_QUESTIONS, file_index,
+    MISSING_SLOT_QUESTIONS, GENERATE_FILE_SKIP_NAME_ANSWERS, file_index,
     is_anaphoric_reference, resolve_anaphoric_target, ANAPHORA_ELIGIBLE_INTENTS,
     find_time_expression, looks_conditional, looks_like_cancel_scheduled, format_delay,
+    looks_like_bare_timer,
     looks_like_start_seeing, looks_like_stop_seeing,
-    canned_reply, _is_wcl_code_like_var,
+    looks_like_start_listening, looks_like_stop_listening,
+    looks_like_function_creation,
+    looks_like_ambiguous_start_recording, looks_like_ambiguous_stop_recording,
+    canned_reply, _is_wcl_code_like_var, _strip_answer_filler,
 )
-from apis import WeatherAPI, WebSearchAPI, TimeAPI, LocationAPI, FileConvertAPI, is_api_failure
+from apis import WeatherAPI, WebSearchAPI, TimeAPI, LocationAPI, FileConvertAPI, VideoDownloadAPI, FileOrganizerAPI, FileGroupingAPI, is_api_failure, location_cache
 from executor import RunningCommand
-from generator import FileGenerator
+from generator import FileGenerator, extract_explicit_name
 from app_control import AppController
+import foreground_tracker
 from graph_router import GraphRouter
 from wcl_resolver import WCLResolver
 from tier_a_wcl_map import is_equivalent
@@ -728,21 +735,47 @@ class _ThinkingHandle:
         self._thread = thread
         self._result = result
 
+    # Shown instead of a silent blank reply when the AI fallback was
+    # actually needed for this turn (graph + WCL both missed) and Ollama
+    # wasn't reachable to answer it -- see join() below. Wording is
+    # deliberately plain, not a stack trace or connection-error string:
+    # the user doesn't run Ollama themselves in most consumer installs.
+    _OLLAMA_UNREACHABLE_MESSAGE = (
+        "I didn't get that -- that needed my AI fallback (Ollama), "
+        "which isn't running or isn't reachable right now."
+    )
+
     def join(self, timeout: float = 30) -> str:
         self._thread.join(timeout=timeout)
-        return self._result.get("text", "")
-
-    def error(self, timeout: float = 30) -> Optional[str]:
-        """Call AFTER join() (or with the same timeout, results are cached
-        on the same dict). Returns the raw router-level error string
-        ("Can't reach Ollama...", "Ollama timed out.", etc.) if the
-        underlying stream_thinking() call failed, else None."""
-        self._thread.join(timeout=timeout)
-        return self._result.get("error")
+        text = self._result.get("text", "")
+        if not text and self._result.get("error"):
+            return _ThinkingHandle._OLLAMA_UNREACHABLE_MESSAGE
+        return text
 
 
 class OllamaRouter:
     """Talks to a local Ollama instance using schema-constrained decoding, twice per turn."""
+
+    # BETA 0.3.51: same "don't re-pay a doomed network call" fail-soft
+    # pattern as apis.py's LocationCache and app_control.py's
+    # AppController (_FAILURE_RETRY_SECONDS) -- Ollama is documented
+    # elsewhere in this file as "now the RARE path" (project owner has
+    # mostly retired it), which means on a real session where it's not
+    # running, EVERY graph+WCL miss used to attempt a fresh connection to
+    # localhost:11434 and wait out however long that connection attempt
+    # takes before falling through to the search-first default -- paying
+    # that cost again and again for the rest of the session even though
+    # the answer never changes until Ollama is actually started. Once a
+    # call confirms Ollama is unreachable, classify() short-circuits
+    # straight to the same {"error": ...} result for
+    # _UNREACHABLE_RETRY_SECONDS without attempting a new connection --
+    # then retries for real after that, in case Ollama gets started
+    # mid-session. This is purely a latency/priority change: the
+    # RESPONSE (fall through to search-first) is identical either way,
+    # confirmed by the fact that _process_single_request already just
+    # checks `"error" in llm_result` regardless of which path produced it.
+    _UNREACHABLE_RETRY_SECONDS = 30.0
+    _last_unreachable_time: Optional[float] = None
 
     def __init__(self, model_name: str = "phi4-mini", base_url: str = "http://localhost:11434"):
         self.model_name = model_name
@@ -756,6 +789,7 @@ class OllamaRouter:
         self._classify_session: Optional[requests.Session] = None
         self._thinking_session: Optional[requests.Session] = None
         self._cancelled = False
+        self._last_unreachable_time: Optional[float] = None
 
     def cancel(self):
         """Called by the Stop button while a request is in flight -- closes both sessions."""
@@ -845,9 +879,12 @@ class OllamaRouter:
                 timeout=60,
             )
             resp.raise_for_status()
+            self._last_unreachable_time = None
         except requests.exceptions.ConnectionError:
+            self._last_unreachable_time = time.time()
             return {"error": "Can't reach Ollama — is it running on localhost:11434?"}
         except requests.exceptions.Timeout:
+            self._last_unreachable_time = time.time()
             return {"error": "Ollama timed out."}
         except Exception as e:
             if self._cancelled:
@@ -908,6 +945,14 @@ class OllamaRouter:
         Never raises -- callers can treat a failure here as non-fatal and
         still proceed with dispatch, since thinking text is cosmetic.
         """
+        # Same fast-fail as classify() -- see _UNREACHABLE_RETRY_SECONDS'
+        # docstring on the class. Thinking text is cosmetic and already
+        # non-fatal on failure, so skipping a doomed connection attempt
+        # here is purely a latency win, never a behavior change.
+        if self._last_unreachable_time is not None:
+            if (time.time() - self._last_unreachable_time) < self._UNREACHABLE_RETRY_SECONDS:
+                return {"error": "Can't reach Ollama — is it running on localhost:11434?", "text": ""}
+
         messages = [
             {"role": "system", "content": _build_thinking_system_prompt(decision_context, has_history=bool(history))},
         ]
@@ -931,6 +976,7 @@ class OllamaRouter:
                 stream=True,
             )
             resp.raise_for_status()
+            self._last_unreachable_time = None
             for raw_line in resp.iter_lines():
                 if self._cancelled:
                     return {"error": "Stopped.", "text": full_text}
@@ -948,10 +994,12 @@ class OllamaRouter:
                     self._log_timing("thinking", chunk)
                     break
         except requests.exceptions.ConnectionError:
+            self._last_unreachable_time = time.time()
             return {"error": "Can't reach Ollama — is it running on localhost:11434?", "text": full_text}
         except requests.exceptions.Timeout:
             # Thinking is cosmetic -- a timeout here shouldn't stop the turn,
             # just means the user didn't get the live-text preamble this time.
+            self._last_unreachable_time = time.time()
             return {"error": "timeout", "text": full_text}
         except Exception as e:
             if self._cancelled:
@@ -987,6 +1035,16 @@ class OllamaRouter:
         passing a large or growing amount of context on every call.
         """
         self._cancelled = False
+
+        # Fast-fail path -- see _UNREACHABLE_RETRY_SECONDS' docstring
+        # above. Only skips the NETWORK ATTEMPT; the return value is
+        # identical in shape to what a real ConnectionError produces, so
+        # every existing caller (_process_single_request's `"error" in
+        # llm_result` check) behaves exactly as if the attempt had been
+        # made and failed the same way it did last time.
+        if self._last_unreachable_time is not None:
+            if (time.time() - self._last_unreachable_time) < self._UNREACHABLE_RETRY_SECONDS:
+                return {"error": "Can't reach Ollama — is it running on localhost:11434?"}
 
         # Tier 1: category. Now receives history too -- see docstring above
         # for why the earlier "tier-1 never needs history" assumption broke.
@@ -1042,9 +1100,15 @@ class ToolDispatcher:
         self.time    = TimeAPI()
         self.location = LocationAPI()
         self.fileconvert = FileConvertAPI()
+        self.videodownload = VideoDownloadAPI()
+        self.fileorganizer = FileOrganizerAPI()
+        self.filegrouping = FileGroupingAPI()
         self._apis = {"weather": self.weather, "websearch": self.search,
                       "time": self.time, "location": self.location,
-                      "fileconvert": self.fileconvert}
+                      "fileconvert": self.fileconvert,
+                      "videodownload": self.videodownload,
+                      "fileorganizer": self.fileorganizer,
+                      "filegrouping": self.filegrouping}
 
     def call(self, meta: Dict, slots: Dict[str, str]) -> str:
         api = self._apis.get(meta["api"])
@@ -1096,7 +1160,26 @@ _MAX_CHAIN_SEGMENTS = 4
 # name. See _segment_is_viable()'s BETA 0.3.14 addition for why a
 # below-threshold classify_or_ask() candidate is trusted for exactly these,
 # and only these.
-_NAME_FROM_OUTSIDE_VOCAB_INTENTS = {"LAUNCH_APP", "KILL_PROCESS", "WAIT_FOR_PROCESS", "FIND_PROCESS", "FIND_SERVICE"}
+_NAME_FROM_OUTSIDE_VOCAB_INTENTS = {
+    "LAUNCH_APP", "KILL_PROCESS", "WAIT_FOR_PROCESS", "FIND_PROCESS", "FIND_SERVICE",
+    # Added alongside the casual-phrasing expansion (graph_source_data/
+    # tier_a_phrasings.py): MAKE_FOLDER's target name has the exact same
+    # "pulled from the user's own text, never from graph vocabulary"
+    # property as LAUNCH_APP's app name above -- confirmed via the real
+    # live-transcript case in test_chain_split_viability.py
+    # (TestCommaBeforeThenIsHandled): 'Create a folder named "python"'
+    # candidates MAKE_FOLDER at classify_or_ask() but can't clear
+    # classify()'s threshold no matter how MAKE_FOLDER's corpus is tuned,
+    # because "python" (or any real folder name) is inherently OOV, and
+    # widening MAKE_FOLDER's corpus to try to cover it dilutes the
+    # command's own vector for every OTHER phrasing via L2 normalization
+    # (see that file's MAKE_FOLDER comment for the concrete numbers).
+    # Verified this doesn't reopen the BETA 0.3.11 false-positive
+    # ("copy a.txt and b.txt to D drive" splitting into a bogus second
+    # DISK_USAGE segment): that segment candidates DISK_USAGE, not
+    # MAKE_FOLDER, so this addition doesn't touch it either way.
+    "MAKE_FOLDER",
+}
 
 # Intents that change what's actually on disk under the sandbox roots --
 # used to invalidate extractor.py's FileIndex right after dispatch, the
@@ -1296,6 +1379,17 @@ class WindowsAIAssistant:
         # log_graph_ask()/confirm_graph_ask() below for the staging-DB
         # write this feeds.
         self._pending_graph_ask: Optional[Dict[str, Any]] = None
+        # BETA 0.3.49: set when a bare "start/stop recording" couldn't be
+        # resolved (start: genuinely no text signal left; stop: both macro
+        # and dictation happened to be active at once) -- see
+        # extractor.py's looks_like_ambiguous_start_recording()/
+        # looks_like_ambiguous_stop_recording() docstrings. Holds until the
+        # next message, read as the answer to that one question. Its own
+        # dedicated pending state, same reasoning as _pending_graph_ask
+        # just above having its own: different question shape, different
+        # resume logic, kept separate rather than overloading _pending's
+        # generic slot-filling contract.
+        self._pending_recording_choice: Optional[Dict[str, Any]] = None
         # Set right after TOKI itself successfully creates/renames/moves/
         # copies/generates something -- see _remember_touched() below. This
         # is what "it"/"that"/"the folder you just made" resolve against
@@ -1305,6 +1399,75 @@ class WindowsAIAssistant:
         # in-memory, no persistence -- same "TOKI already knows when it
         # wrote something" reasoning as FileIndex/AppController's caches.
         self._last_touched: Optional[Dict[str, str]] = None
+        self._prime_caches_in_background()
+        # Starts app_control.py's foreground-window fix (see
+        # foreground_tracker.py's module docstring) as early as possible --
+        # the whole point is to have already observed the real window BEFORE
+        # the user's first command shifts OS focus to TOKI itself. No-op on
+        # non-Windows platforms; idempotent, so a second WindowsAIAssistant
+        # in the same process (e.g. across tests) doesn't spin up a second
+        # competing thread. foreground_tracker.start() already fails soft
+        # internally, but wrapped here too, same defense-in-depth posture
+        # as _prime_caches_in_background's own try/excepts -- this is a
+        # best-effort UX fix, never something that should be able to
+        # prevent WindowsAIAssistant from constructing at all.
+        try:
+            foreground_tracker.start()
+        except Exception:
+            pass
+
+    def _prime_caches_in_background(self) -> None:
+        """Warms the three "fetch once, reuse all session" caches
+        (apis.py's location_cache, AppController's installed-app list,
+        extractor.py's FileIndex) right away instead of leaving them
+        lazy -- previously all three only populated on whatever request
+        happened to need them first, so a user's FIRST app-launch or
+        file-open turn silently paid the full fetch cost (a Get-StartApps
+        subprocess call, a full sandbox os.walk, an ipinfo.io round
+        trip) that every later turn gets for free. apis.py's
+        LocationAPI.get_raw_location() docstring already anticipated
+        this ("for callers that need... e.g. showing a short status on
+        startup once the fetch completes") but nothing ever actually
+        called it at startup until now.
+
+        Each cache gets its OWN daemon thread rather than one thread
+        doing all three sequentially -- they're three independent I/O
+        waits (network, subprocess, disk), so running them in parallel
+        means the slowest one (typically the network location lookup)
+        doesn't hold up the other two. Daemon threads: this must never
+        keep the process alive on its own or block shutdown waiting for
+        a slow/hung network call.
+
+        Deliberately fire-and-forget: every one of these three already
+        fails soft internally (never raises, never caches a failure
+        forever -- see each cache's own docstring), and every real call
+        site already handles "cache came back empty" today. If priming
+        hasn't finished (or failed) by the time the user's first real
+        request needs one of these, that request just pays the normal
+        first-use fetch cost exactly like before this change -- priming
+        can only make things faster, never break anything if it's slow
+        or unlucky.
+        """
+        def _prime_location():
+            try:
+                location_cache.get()
+            except Exception:
+                pass
+
+        def _prime_apps():
+            try:
+                self.app_controller.prime_app_cache()
+            except Exception:
+                pass
+
+        def _prime_files():
+            try:
+                file_index.get_entries()
+            except Exception:
+                pass
+
+        for target in (_prime_location, _prime_apps, _prime_files):
+            threading.Thread(target=target, daemon=True).start()
 
     def _remember_touched(self, intent: str, slots: Dict[str, Any]) -> None:
         """Records the path this dispatch just created/produced, so a
@@ -1364,6 +1527,7 @@ class WindowsAIAssistant:
         # daemon=True alone isn't quite enough on its own.
         self.scheduler.shutdown()
         self.condition_poller.shutdown()
+        foreground_tracker.stop()
 
     def _start_thinking(
         self, user_prompt: str, decision_context: str,
@@ -1456,32 +1620,7 @@ class WindowsAIAssistant:
         to build their response, with no dispatch work to run in parallel).
         """
         handle = self._start_thinking(user_prompt, decision_context, on_thinking_token, history)
-        if not handle:
-            return ""
-        text = handle.join()
-        # Every non-CHAT/ASK_CONTEXT path only ever reaches Ollama for
-        # narration on top of an already-decided action -- if that fails,
-        # _is_narration_grounded()'s fallback_meta branch already covers
-        # it with a grounded, factual sentence (see _start_thinking()).
-        # CHAT/ASK_CONTEXT and the defensive catch-all at the bottom of
-        # process_request() have no such fallback, since there's no
-        # action/result to narrate -- Ollama genuinely was the only way
-        # to answer. Without this, the user sees a blank reply exactly
-        # when the app most needed to explain what happened. Ollama is
-        # optional and TOKI is designed to rarely need it (Tier A/Tier B
-        # resolve most requests without any model call at all) -- this is
-        # the one honest message for the rare case it's actually needed
-        # and isn't there.
-        if not text and handle.error():
-            text = (
-                "I didn't get that. That needed my AI fallback (Ollama), "
-                "which isn't running or isn't reachable right now. Most of "
-                "what I do doesn't need it, but free-form chat and open-ended "
-                "questions do -- start Ollama and try again."
-            )
-            if on_thinking_token:
-                on_thinking_token(text)
-        return text
+        return handle.join() if handle else ""
 
     def _check_destructive_shadow(self, intent: str, user_prompt: str) -> Optional[str]:
         """priority.md #11: returns a clarifying question if `intent` (a
@@ -1723,6 +1862,12 @@ class WindowsAIAssistant:
                 on_generate_token, on_generate_done,
             )
 
+        if self._pending_recording_choice is not None:
+            return self._resume_recording_choice(
+                user_prompt, on_output, on_done, on_thinking_token,
+                on_generate_token, on_generate_done,
+            )
+
         if self._pending is not None:
             return self._resume_pending(
                 user_prompt, on_output, on_done, on_thinking_token,
@@ -1780,6 +1925,98 @@ class WindowsAIAssistant:
                 on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
             )
 
+        # ── "start listening" / "stop listening" pre-checks ──────────────
+        # Same pre-check shape and same reasoning as start/stop seeing
+        # just above (see looks_like_start_listening()'s own docstring in
+        # extractor.py) -- checked right alongside that block since both
+        # are "fixed phrasing, never graph vocabulary" cases.
+        if looks_like_start_listening(user_prompt):
+            slots = extract_slots("START_LISTENING", user_prompt)
+            return self._handle_missing_or_dispatch(
+                "START_LISTENING", user_prompt, slots,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            )
+
+        if looks_like_stop_listening(user_prompt):
+            slots = extract_slots("STOP_LISTENING", user_prompt)
+            return self._handle_missing_or_dispatch(
+                "STOP_LISTENING", user_prompt, slots,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            )
+
+        # ── "function" pre-check (routes straight to GENERATE_FILE) ──────
+        # BETA 0.3.56: bypasses Tier A's graph scoring entirely for any
+        # message mentioning "function" -- see extractor.py's
+        # looks_like_function_creation() docstring for the full
+        # reasoning (this closes STATUS.md's 0.3.55 "not yet fixed"
+        # flag: "create a function called calculator" scoring below
+        # CONFIDENCE_THRESHOLD because a specific name dilutes the
+        # query's own TF-IDF vector). Same pre-check shape as the
+        # start/stop seeing/listening checks just above -- GENERATE_FILE
+        # has "slots": [] by design, so extract_slots() here always
+        # returns {} (never None, never triggers the missing-slot ask
+        # path), and _dispatch()'s own extract_explicit_name() check
+        # (BETA 0.3.55) still runs normally on the other side of this --
+        # a bare "create a function" with no name still asks "what
+        # should I name it?" exactly as it already does for every other
+        # GENERATE_FILE request reached the normal way.
+        if looks_like_function_creation(user_prompt):
+            slots = extract_slots("GENERATE_FILE", user_prompt)
+            return self._handle_missing_or_dispatch(
+                "GENERATE_FILE", user_prompt, slots,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            )
+
+        # ── Ambiguous bare "start/stop recording" pre-checks ─────────────
+        # Only ever reached once BOTH the seeing/watching AND listening/
+        # dictating checks above already returned False -- see
+        # extractor.py's looks_like_ambiguous_start_recording()/
+        # looks_like_ambiguous_stop_recording() docstrings for why this is
+        # the genuinely irreducible leftover case, not a weaker version of
+        # the checks above.
+        if looks_like_ambiguous_stop_recording(user_prompt):
+            # Runtime state actually answers this one, unlike "start" --
+            # by the time someone says "stop," something real either is or
+            # isn't currently running, which is information text alone
+            # never has. Only asks if BOTH happen to be active at once
+            # (unusual, but not prevented anywhere today) or NEITHER is
+            # (nothing to stop -- say so plainly rather than guessing).
+            macro_active = self.app_controller._active_recorder is not None
+            dictation_active = self.app_controller._active_dictation is not None
+            if macro_active and not dictation_active:
+                slots = extract_slots("STOP_SEEING", user_prompt)
+                return self._handle_missing_or_dispatch(
+                    "STOP_SEEING", user_prompt, slots,
+                    on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+                )
+            if dictation_active and not macro_active:
+                slots = extract_slots("STOP_LISTENING", user_prompt)
+                return self._handle_missing_or_dispatch(
+                    "STOP_LISTENING", user_prompt, slots,
+                    on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+                )
+            if not macro_active and not dictation_active:
+                msg = "Nothing's currently recording -- nothing to stop."
+                self._commit_history(user_prompt, msg)
+                return {"thinking": "", "response": msg, "kind": "chat"}
+            # Both active at once -- the one real case text can't resolve.
+            self._pending_recording_choice = {"mode": "stop", "original_text": user_prompt}
+            question = ("Both a macro recording and dictation are running -- "
+                        "stop the macro, or stop dictation?")
+            self._commit_history(user_prompt, question)
+            return {"thinking": "", "response": question, "kind": "chat"}
+
+        if looks_like_ambiguous_start_recording(user_prompt):
+            # Nothing's running yet to check state against -- this is the
+            # genuinely irreducible case, see extractor.py's
+            # looks_like_ambiguous_start_recording() docstring. Ask once
+            # rather than guess either way.
+            self._pending_recording_choice = {"mode": "start", "original_text": user_prompt}
+            question = ("Recording clicks to save as a macro, or recording/dictating "
+                        "what you say?")
+            self._commit_history(user_prompt, question)
+            return {"thinking": "", "response": question, "kind": "chat"}
+
         # ── Scheduling / conditional pre-check ──────────────────────────
         # Runs BEFORE both the override parser and graph classification.
         # This has to happen first, not after a graph miss, because the
@@ -1792,6 +2029,26 @@ class WindowsAIAssistant:
         # docstrings for the full rationale. A message with neither shape
         # falls through completely unchanged to the override/graph/LLM
         # pipeline below -- this can never steal an ordinary command.
+        # BETA 0.3.48: SET_TIMER is checked FIRST, before the generic
+        # SCHEDULE_COMMAND branch below -- a bare "set a timer for 10
+        # minutes" / "remind me in 20 minutes" has no real command
+        # attached to it, and letting SCHEDULE_COMMAND claim it first
+        # would store "remind me" as command_text and silently
+        # web-search that exact phrase the moment the timer fires (see
+        # extractor.py's looks_like_bare_timer() docstring for how this
+        # was found). Only messages matching that specific bare-timer
+        # shape are diverted here; anything with a real command attached
+        # ("shut down in 10 minutes") still falls through to
+        # SCHEDULE_COMMAND unchanged, since looks_like_bare_timer()
+        # returns None for those.
+        bare_timer = looks_like_bare_timer(user_prompt)
+        if bare_timer:
+            slots = extract_slots("SET_TIMER", user_prompt)
+            return self._handle_missing_or_dispatch(
+                "SET_TIMER", user_prompt, slots,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            )
+
         time_match = find_time_expression(user_prompt)
         if time_match:
             slots = extract_slots("SCHEDULE_COMMAND", user_prompt)
@@ -2030,90 +2287,152 @@ class WindowsAIAssistant:
         # running) -- same fail-open pattern used everywhere else in this
         # file for graph_router/wcl_resolver construction failures.
         if classification is None:
-            # BETA 0.3.3 fix: before ever letting the LLM freely decide
-            # CHAT/GENERATE/ASK_CONTEXT, check whether the graph has a
-            # real (if below-threshold) command candidate for this
-            # message -- i.e. the words genuinely resemble a known
-            # action's vocabulary, just not confidently enough to
-            # auto-dispatch. If so, don't hand this to the LLM's free-text
-            # judgment at all: force ASK_CONTEXT directly. Confirmed live
-            # why this matters -- "kill notepad.exe" (a clear below-
-            # threshold KILL_PROCESS candidate) reached the LLM's CHAT/
-            # GENERATE call and it fabricated a full completed-action
-            # narration ("Done, I've terminated any active instances of
-            # Notepad"), directly violating stream_thinking's own explicit
-            # "never state the result, only the action you're about to
-            # take" instruction. A small model given an action-shaped
-            # message and only CHAT/GENERATE/ASK_CONTEXT to choose from
-            # will sometimes just narrate the action anyway rather than
-            # picking ASK_CONTEXT -- so for this specific case (a graph
-            # candidate exists), skip giving it that chance. Genuine
-            # total misses (no candidate at all) are unaffected and still
-            # go to the LLM exactly as before.
-            if self.graph_router is not None:
-                pre_check = self.graph_router.classify_or_ask(user_prompt)
-                candidate = pre_check.get("candidate") if "ask" in pre_check else None
-                if candidate:
-                    # FIX (found via self-review, not live testing): the
-                    # first version of this gate returned early here
-                    # without ever calling log_graph_ask() / setting
-                    # self._pending_graph_ask, unlike the structurally
-                    # identical fail-open branch a few lines below. That
-                    # silently starved the 👍/👎-into-staging-DB vocabulary
-                    # loop of data on exactly the turns it's most useful
-                    # for (a real below-threshold candidate) -- now staged
-                    # the same way, so confirm/reject wiring behaves
-                    # identically regardless of which path produced the ask.
-                    unknown_words = pre_check.get("unknown_words", [])
-                    staged_ids = (
-                        log_graph_ask(user_prompt, unknown_words, candidate)
-                        if unknown_words else []
-                    )
-                    self._pending_graph_ask = {
-                        "user_prompt": user_prompt,
-                        "unknown_words": unknown_words,
-                        "candidate": candidate,
-                        "staged_ids": staged_ids,
-                    }
-                    note = pre_check["ask"]
-                    self._commit_history(user_prompt, note)
-                    return {"thinking": "", "response": note, "kind": "chat"}
+            # Caught by the existing test suite while validating the
+            # BETA 0.3.47 change below (test_wcl_slot_filling_integration.py):
+            # a WCL match that's RESOLVED or AMBIGUOUS but genuinely can't
+            # be auto-dispatched (3+ variables, a destructive command the
+            # user just cancelled, etc.) is NOT the same situation as a
+            # real graph+WCL miss -- wcl_resolver found a real, specific
+            # command here, it just can't safely fill it in yet (see the
+            # "still the open follow-up milestone" comment a few dozen
+            # lines up). Defaulting THAT straight to a web search would
+            # mean literally googling the user's raw system command text
+            # instead of honestly saying slot-filling for it isn't wired
+            # up yet -- worse than the old behavior, not better. Only a
+            # genuine total miss (UNRESOLVED, or no WCL resolver at all)
+            # falls through to the search-first fallback below.
+            wcl_had_real_candidate = (
+                self.wcl_resolver is not None
+                and wcl_result["status"] in ("RESOLVED", "AMBIGUOUS")
+            )
+            if wcl_had_real_candidate:
+                msg = "I found a matching command but can't safely fill in all its details yet -- try rephrasing it more directly."
+                self._commit_history(user_prompt, msg)
+                return {"thinking": "", "response": msg, "kind": "chat"}
 
+            # BETA 0.3.47: Ollama is now the RARE path (project owner has
+            # mostly retired it -- only kept as a specific fallback for
+            # whenever it happens to be reachable), not the default one
+            # this whole block was written against. The old pre-LLM gate
+            # below used to short-circuit straight to a graph-guess
+            # clarifying question ("does X mean Y?") for ANY below-
+            # threshold candidate, BEFORE ever trying Ollama, specifically
+            # to stop Ollama's free-text CHAT/GENERATE call from
+            # fabricating a false "Done, I've terminated..." narration for
+            # command-shaped text (see git history / STATUS.md for the
+            # original "kill notepad.exe" bug this fixed). That protection
+            # only matters when Ollama is actually the one being asked to
+            # narrate -- if it's unreachable anyway there's no fabrication
+            # risk to guard against.
+            #
+            # Root cause of the NEW bug this replaces (confirmed live,
+            # reproduced directly against the shipped graph): with Ollama
+            # down, this gate fired on nearly every plain question, not
+            # just real command near-misses, because graph_router's
+            # bag-of-words scoring cannot tell "kill notepad.exe" (real
+            # KILL_PROCESS candidate, confidence 0.172) apart from "what
+            # is the capital of mexico" (bogus LIST_FILES candidate,
+            # confidence 0.381, driven entirely by the filler word "what")
+            # or "what does mexico and capital mean" (bogus PATH_EXISTS
+            # candidate, confidence 0.315, off nothing but "does"). Tried
+            # three different automatic ways to separate real near-misses
+            # from this -- raising CONFIDENCE_THRESHOLD for the ask path,
+            # requiring the matched word have high idf, requiring a
+            # minimum query-word coverage ratio -- and checked each against
+            # the real graph: none of them cleanly separates the two
+            # (the bogus cases scored HIGHER on every metric than some of
+            # the genuine documented near-misses like "kill notepad.exe").
+            # This is an inherent limit of scoring word-overlap with no
+            # actual language understanding, not a tunable bug -- which is
+            # exactly why this used to lean on Ollama for it.
+            #
+            # New behavior: try Ollama first, unconditionally, same as
+            # this method's own comment above already says is the
+            # documented design. If it's reachable, its real judgment
+            # (CHAT/GENERATE/ASK_CONTEXT/a command) is used exactly as
+            # before -- this IS the "specific fallback" case. If it's not
+            # reachable (now the common case), don't guess a specific
+            # wrong command out loud -- default to SEARCH_WEB with the
+            # user's own text as the query. The graph's below-threshold
+            # candidate (if any) is still logged into vocab_staging.jsonl
+            # so the 👍/👎 vocabulary-learning loop doesn't lose data, it
+            # just no longer interrupts the user with a guess about it.
             llm_result = self.router.classify(user_prompt, history=self.history)
             if "error" not in llm_result:
                 classification = llm_result
-            elif self.graph_router is not None:
-                ask_result = self.graph_router.classify_or_ask(user_prompt)
+            else:
+                ask_result = (
+                    self.graph_router.classify_or_ask(user_prompt)
+                    if self.graph_router is not None
+                    else {"ask": "", "unknown_words": []}
+                )
                 if "intent" in ask_result:
                     classification = ask_result
                 else:
                     unknown_words = ask_result.get("unknown_words", [])
                     candidate = ask_result.get("candidate")
-                    staged_ids = (
+                    if unknown_words:
                         log_graph_ask(user_prompt, unknown_words, candidate)
-                        if unknown_words else []
+
+                    # BETA 0.3.48: before defaulting to a raw-text search,
+                    # take one real, deterministic look at whether this is
+                    # actually an app-launch request the graph just didn't
+                    # have the vocabulary for -- e.g. "pull up obs",
+                    # "yo get discord going", any phrasing that never put
+                    # "open/launch/start/run" anywhere near a name the
+                    # TF-IDF vocabulary recognizes. This is NOT another
+                    # fuzzy text-similarity guess (see graph_router.py's
+                    # CONFIDENCE_THRESHOLD comment for why that approach
+                    # has a hard ceiling) -- it's a ground-truth check
+                    # against what's actually installed (Get-StartApps via
+                    # app_controller.app_exists), reusing the exact same
+                    # cascade (resolve_open_target) the LAUNCH_APP/OPEN_ITEM
+                    # dispatch path below already trusts, just run earlier.
+                    # Skipped entirely if the user already used the
+                    # explicit ''/"" convention -- same as every other
+                    # resolve_open_target() call site, that convention
+                    # means "don't second-guess me" and should still win.
+                    resolved_open = (
+                        None if has_explicit_open_convention(user_prompt)
+                        else resolve_open_target(user_prompt, self.app_controller.app_exists)
                     )
-                    # Held until the NEXT message -- see confirm_pending_graph_ask()/
-                    # UI thumbs up-down wiring. If the user just moves on
-                    # without confirming, this stays "pending" forever in
-                    # the staging file, which is fine: pending rows are
-                    # simply never picked up by pending_review().
-                    self._pending_graph_ask = {
-                        "user_prompt": user_prompt,
-                        "unknown_words": unknown_words,
-                        "candidate": candidate,
-                        "staged_ids": staged_ids,
-                    }
-                    self._commit_history(user_prompt, ask_result["ask"])
-                    return {"thinking": "", "response": ask_result["ask"], "kind": "chat"}
-            else:
-                # Both the LLM call and the graph failed open -- nothing
-                # can classify anything right now. Say so plainly rather
-                # than silently doing nothing or crashing on a KeyError
-                # a few lines down.
-                msg = "I can't classify that right now -- Ollama isn't reachable and my command graph didn't load."
-                self._commit_history(user_prompt, msg)
-                return {"thinking": "", "response": msg, "kind": "chat"}
+                    if resolved_open is not None:
+                        # Real app (or real file/folder) found -- treat
+                        # this exactly like a confident graph/LLM hit and
+                        # fall through to normal dispatch below. The
+                        # LAUNCH_APP/OPEN_ITEM cascade a few dozen lines
+                        # down re-resolves the same target via the same
+                        # cache (cheap -- see app_control.py's indefinite
+                        # per-process cache), so no slot data needs to be
+                        # threaded through here; it's the exact same
+                        # re-resolve-on-commit pattern that cascade already
+                        # uses for its own retry-once-on-miss path.
+                        classification = {"intent": resolved_open["intent"]}
+                    else:
+                        # Run the search directly rather than synthesizing a
+                        # {"intent": "SEARCH_WEB"} classification and letting it
+                        # fall through the normal dispatch pipeline -- caught by
+                        # the existing test suite: that pipeline's "did an
+                        # intent get dispatched" check is also how the
+                        # confirmation-cancel flow (_resume_pending_confirmation,
+                        # "anything but yes cancels silently") verifies nothing
+                        # ran. A cancel reply like "no thanks" has no graph/WCL
+                        # match either, so it used to land right here too -- it
+                        # should stay a true no-op, not turn into an actual
+                        # Chrome window opening a search for "no thanks".
+                        search_query = user_prompt.strip()
+                        if search_query:
+                            result_text = self.dispatcher.search.search(query=search_query)
+                            self._commit_history(user_prompt, result_text)
+                            return {"thinking": "", "response": result_text, "kind": "api",
+                                    "intent": "SEARCH_WEB", "result": result_text}
+                        msg = "I didn't catch that -- can you rephrase?"
+                        self._commit_history(user_prompt, msg)
+                        return {"thinking": "", "response": msg, "kind": "chat"}
+                        # classification is guaranteed non-None past this
+                        # point -- either resolved_open set it just above,
+                        # or one of the two returns right above this
+                        # comment already exited the function.
 
         if "error" in classification:
             return {"error": classification["error"]}
@@ -2380,6 +2699,65 @@ class WindowsAIAssistant:
         reject_graph_ask(pending["staged_ids"])
         return True
 
+    # BETA 0.3.49: resolves the one question _pending_recording_choice
+    # ever asks -- see extractor.py's looks_like_ambiguous_start_recording()/
+    # looks_like_ambiguous_stop_recording() docstrings for why this
+    # question exists at all instead of another guessing attempt. Reply
+    # matching is deliberately a small curated keyword set, same posture
+    # as _GRAPH_ASK_YES_WORDS/_GRAPH_ASK_NO_WORDS just above and
+    # synonyms.py's fixed table elsewhere -- this is picking one of
+    # exactly two named options, not open-ended classification, so a
+    # keyword table is the right tool here, not a ceiling like it is for
+    # open text (see graph_router.py's CONFIDENCE_THRESHOLD docstring).
+    _RECORDING_CHOICE_MACRO_WORDS = {
+        "macro", "clicks", "click", "clicking", "actions", "seeing", "watching", "1", "first",
+    }
+    _RECORDING_CHOICE_VOICE_WORDS = {
+        "say", "speak", "talk", "voice", "dictation", "dictate", "dictating",
+        "listening", "listen", "2", "second",
+    }
+
+    def _resume_recording_choice(
+        self,
+        user_reply: str,
+        on_output: Callable[[str], None],
+        on_done: Callable[[int], None],
+        on_thinking_token: Optional[Callable[[str], None]],
+        on_generate_token: Optional[Callable[[str], None]],
+        on_generate_done: Optional[Callable[[Optional[str], Optional[str]], None]],
+    ) -> Dict[str, Any]:
+        """Handles the reply to the one ambiguous-recording question
+        _process_single_request ever asks (see the "start"/"stop" checks
+        there). A reply that doesn't clearly pick one is NOT guessed at --
+        same fallthrough shape as _resume_pending_graph_ask() just above:
+        treat it as a brand-new message instead of swallowing what might
+        be the user's real next command."""
+        pending = self._pending_recording_choice
+        self._pending_recording_choice = None
+        reply_words = set(re.findall(r"[a-z0-9']+", user_reply.strip().lower()))
+
+        wants_macro = bool(reply_words & self._RECORDING_CHOICE_MACRO_WORDS)
+        wants_voice = bool(reply_words & self._RECORDING_CHOICE_VOICE_WORDS)
+
+        if wants_macro and not wants_voice:
+            intent = "STOP_SEEING" if pending["mode"] == "stop" else "START_SEEING"
+        elif wants_voice and not wants_macro:
+            intent = "STOP_LISTENING" if pending["mode"] == "stop" else "START_LISTENING"
+        else:
+            # Neither, or both, keywords present -- not a clean pick.
+            # Same principle as every other ambiguous-reply fallthrough in
+            # this file: don't guess, treat as a fresh message.
+            return self._process_single_request(
+                user_reply, on_output, on_done, on_thinking_token,
+                on_generate_token, on_generate_done,
+            )
+
+        slots = extract_slots(intent, pending["original_text"])
+        return self._handle_missing_or_dispatch(
+            intent, pending["original_text"], slots,
+            on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+        )
+
     # BETA 0.3.38: caution/destructive WCL command confirmation.
     #
     # Deliberately minimal, matching the actual product decision made in
@@ -2409,6 +2787,7 @@ class WindowsAIAssistant:
         on_thinking_token: Optional[Callable[[str], None]],
         on_generate_token: Optional[Callable[[str], None]],
         on_generate_done: Optional[Callable[[Optional[str], Optional[str]], None]],
+        skip_generate_name_check: bool = False,
     ) -> Dict[str, Any]:
         """BETA 0.3.38: the ONE place every dispatch-ready call site in
         this file routes through (instead of calling self._dispatch()
@@ -2420,13 +2799,21 @@ class WindowsAIAssistant:
         _resume_pending_confirmation()'s own dispatch call after a YES --
         that one calls self._dispatch() directly on purpose, since a
         confirmation was already just given; routing it back through here
-        would ask again."""
+        would ask again.
+
+        skip_generate_name_check (BETA 0.3.55): forwarded straight to
+        _dispatch() -- see that parameter's own docstring there. Only
+        ever True from _resume_pending()'s GENERATE_FILE branch, after
+        the "what should I name it?" question has already been asked and
+        answered (or explicitly skipped) once this turn.
+        """
         meta = _intent_meta(intent)
         if meta.get("wcl_danger_level") in ("caution", "destructive"):
             return self._ask_for_confirmation(intent, user_prompt, slots, context, meta)
         return self._dispatch(
             intent, user_prompt, slots, context,
             on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            skip_generate_name_check=skip_generate_name_check,
         )
 
     def _ask_for_confirmation(
@@ -2506,6 +2893,34 @@ class WindowsAIAssistant:
         original_text = pending["original_text"]
         meta = _intent_meta(intent)
 
+        if intent == "GENERATE_FILE":
+            # BETA 0.3.55: GENERATE_FILE has "slots": [] (see its INTENTS
+            # entry's own comment for why -- it never goes through
+            # extract_slots()/resolve_missing_slot() like a template
+            # intent does), so it can't reuse the generic slot-resume path
+            # below at all. The "answer" here is free text meant to be
+            # merged back into the ORIGINAL description, not a dict of
+            # named slot values -- generator.extract_explicit_name() reads
+            # straight from that merged text later, the same way it reads
+            # any other GENERATE_FILE request.
+            answer = _strip_answer_filler(user_answer).strip()
+            if answer.lower() in GENERATE_FILE_SKIP_NAME_ANSWERS or not answer:
+                # Explicit opt-out (or an empty/unusable reply -- treated
+                # the same as skip rather than re-asking forever, since
+                # this question already has a stated "or say 'skip'"
+                # escape hatch unlike every other MISSING_SLOT_QUESTIONS
+                # entry) -- proceed with generator.py's own generic
+                # default name, unchanged original text.
+                final_prompt = original_text
+            else:
+                final_prompt = f"{original_text} called {answer}"
+            context = _decision_context(meta, {})
+            return self._dispatch_or_confirm(
+                intent, final_prompt, {}, context,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+                skip_generate_name_check=True,
+            )
+
         slots = resolve_missing_slot(
             intent, original_text, user_answer,
             wcl_variables=meta.get("slots") if intent.startswith("WCL_") else None,
@@ -2576,6 +2991,7 @@ class WindowsAIAssistant:
         on_thinking_token: Optional[Callable[[str], None]],
         on_generate_token: Optional[Callable[[str], None]],
         on_generate_done: Optional[Callable[[Optional[str], Optional[str]], None]],
+        skip_generate_name_check: bool = False,
     ) -> Dict[str, Any]:
         """
         Runs the already-decided, already-slot-filled intent. Shared by both
@@ -2614,6 +3030,24 @@ class WindowsAIAssistant:
         meta = _intent_meta(intent)
 
         if meta["kind"] == "generate":
+            # BETA 0.3.55: ask for a name instead of silently defaulting to
+            # "generated_file.txt" when the request has no "called X"/
+            # "named X" clause at all -- see MISSING_SLOT_QUESTIONS'
+            # GENERATE_FILE entry and generator.extract_explicit_name()'s
+            # own docstring for the full bug this closes (every other
+            # file-creating intent already asks on a miss; this one
+            # silently didn't, which is what made a cut-off/never-spoken
+            # name invisible instead of a clear follow-up question).
+            # skip_generate_name_check is True only when _resume_pending()
+            # is calling back in after that question was already asked
+            # (and either answered or explicitly skipped) -- checking
+            # again here would just ask a second time.
+            if not skip_generate_name_check and extract_explicit_name(user_prompt) is None:
+                question = MISSING_SLOT_QUESTIONS.get(intent, "What should I name it?")
+                self._pending = {"intent": intent, "original_text": user_prompt}
+                self._commit_history(user_prompt, question)
+                return {"thinking": "", "response": question, "kind": "chat"}
+
             thinking_handle = self._start_thinking(
                 user_prompt, context, on_thinking_token,
                 expected_values=_narration_values(slots), fallback_meta=meta, fallback_slots=slots,
@@ -2794,6 +3228,41 @@ class WindowsAIAssistant:
                     f"Say \"cancel {item.id}\" to cancel it.")
             self._commit_history(user_prompt, note)
             return {"thinking": "Done.", "response": note, "kind": "schedule",
+                     "intent": intent, "schedule_id": item.id}
+
+        if meta["kind"] == "timer":
+            # Deliberately NOT the "schedule" branch's pattern of
+            # re-running some text through process_request at fire time
+            # -- there's no command here to re-run (see intents.py's
+            # SET_TIMER entry / extractor.py's looks_like_bare_timer()
+            # docstring for why that's exactly the bug this intent
+            # exists to avoid). Fire-time action is just a plain
+            # notification committed to history, same visibility model
+            # "schedule" already uses (no separate toast/tray plumbing --
+            # this app has no cross-cutting push-notification channel
+            # today, so this matches the one that already exists rather
+            # than inventing a new one).
+            delay_seconds = float(slots["delay_seconds"])
+            label = (slots.get("label") or "").strip()
+            delay_label = format_delay(delay_seconds)
+            display = f"Timer ({label})" if label else "Timer"
+
+            def _on_fire():
+                note = f"⏰ {display} is up!" if not label else f"⏰ Timer's up -- {label}"
+                self._commit_history(f"(timer) {display}", note)
+
+            try:
+                item = self.scheduler.schedule(delay_seconds, display, _on_fire)
+            except SchedulerFullError as e:
+                note = f"Done. Can't set that timer: {e}"
+                self._commit_history(user_prompt, note)
+                return {"thinking": "", "response": note, "kind": "chat"}
+
+            note = (f"Done. Timer set as {item.id}, {delay_label}"
+                    + (f" -- I'll remind you: {label}" if label else "") + ". "
+                    f"Say \"cancel {item.id}\" to cancel it.")
+            self._commit_history(user_prompt, note)
+            return {"thinking": "Done.", "response": note, "kind": "timer",
                      "intent": intent, "schedule_id": item.id}
 
         if meta["kind"] == "cancel_scheduled":

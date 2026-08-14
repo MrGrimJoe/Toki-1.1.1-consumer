@@ -15,8 +15,13 @@ import os
 import re
 import subprocess
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+
+# Directory this file lives in -- the installed app root. The sandbox
+# config (if the installer wrote one) lives alongside it at
+# config/sandbox_config.json, never bundled with the app itself.
+_APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+_SANDBOX_CONFIG_PATH = os.path.join(_APP_ROOT, "config", "sandbox_config.json")
 
 
 # ─── Scheduled/delayed commands ("do X in N minutes" / "do X at HH:MM") ──────
@@ -38,12 +43,52 @@ from typing import Callable, Dict, List, Optional, Tuple
 # classification completely unchanged -- this can't accidentally steal
 # a plain "open notepad" just because it can't rule out timing.
 
+# "for" added alongside "in" -- BETA 0.3.48 fix, confirmed live: "set a
+# timer for 10 minutes" is the single most natural way to phrase a timer
+# request, and it used to match NOTHING here (only "in N minutes" did),
+# so it fell all the way through to a raw graph/LLM miss instead of ever
+# reaching the scheduling path at all. "for" only ever appears in this
+# duration-preposition role in real phrasings ("for 10 minutes", "for an
+# hour") -- it isn't a word find_time_expression's caller needs to keep
+# for anything else, so widening the regex carries no ambiguity risk the
+# way a bare word-overlap match would.
+# BETA 0.3.49 fix: the amount before the unit only ever accepted digits
+# (\d+), so word-form durations -- "for an hour", "in a minute" -- never
+# matched at all, even though they're at least as natural as "for 10
+# minutes". Confirmed live: "set a timer for an hour" didn't even reach
+# the scheduling pre-check, it fell straight through to a normal graph
+# miss and silently web-searched the whole sentence -- the exact bug
+# class SET_TIMER (BETA 0.3.48) was written to eliminate, just via a
+# different gap. "a"/"an" here only ever mean the single-unit amount
+# (matching how a person says "for a minute" == "for 1 minute" == "for
+# one minute"), not the article on a following noun -- \b anchors on
+# both sides plus the required unit word right after keep this from
+# matching stray "a"/"an" elsewhere in a sentence.
 _RELATIVE_TIME_RE = re.compile(
-    r"\bin\s+(\d+)\s*(second|sec|minute|min|hour|hr)s?\b",
+    r"\b(?:in|for)\s+(\d+|a|an)\s*(second|sec|minute|min|hour|hr)s?\b",
     re.IGNORECASE,
 )
 _ABSOLUTE_TIME_RE = re.compile(
     r"\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
+    re.IGNORECASE,
+)
+
+# BETA 0.3.49 fix: "set a 10 minute timer" / "a 10 minute alarm" has no
+# "in"/"for" preposition at all -- the duration sits directly in front of
+# the timer/alarm/reminder noun instead. _RELATIVE_TIME_RE requires
+# in/for, so this shape missed find_time_expression() entirely (not even
+# a scheduling attempt -- straight to a plain graph/LLM miss). Rather
+# than making the preposition optional everywhere (which would make
+# ordinary sentences like "the movie is 90 minutes long" look like a
+# scheduling request), this only fires when the duration is immediately
+# followed by one of the timer trigger nouns -- same narrow, curated-
+# phrase-set posture as _BARE_TIMER_REMAINDER_RE below, not a general
+# "number + unit anywhere" detector. The trigger noun itself is matched
+# via lookahead (not consumed), so it stays in the remainder for
+# _BARE_TIMER_REMAINDER_RE to recognize afterward.
+_BARE_DURATION_BEFORE_TIMER_RE = re.compile(
+    r"\b(\d+|a|an)\s*(second|sec|minute|min|hour|hr)s?\s+"
+    r"(?=timer\b|alarm\b|reminder\b)",
     re.IGNORECASE,
 )
 
@@ -52,6 +97,13 @@ _UNIT_SECONDS = {
     "minute": 60, "min": 60,
     "hour": 3600, "hr": 3600,
 }
+
+
+def _parse_amount(raw: str) -> int:
+    """'10' -> 10, 'a'/'an' -> 1 (word-form single unit, e.g. 'a minute')."""
+    if raw.lower() in ("a", "an"):
+        return 1
+    return int(raw)
 
 
 def find_time_expression(text: str) -> Optional[Tuple[float, str, str]]:
@@ -72,7 +124,16 @@ def find_time_expression(text: str) -> Optional[Tuple[float, str, str]]:
     """
     m = _RELATIVE_TIME_RE.search(text)
     if m:
-        amount = int(m.group(1))
+        amount = _parse_amount(m.group(1))
+        unit = m.group(2).lower()
+        delay = amount * _UNIT_SECONDS[unit]
+        remainder = (text[:m.start()] + text[m.end():]).strip()
+        remainder = re.sub(r"\s{2,}", " ", remainder).strip(" ,.")
+        return delay, m.group(0), remainder
+
+    m = _BARE_DURATION_BEFORE_TIMER_RE.search(text)
+    if m:
+        amount = _parse_amount(m.group(1))
         unit = m.group(2).lower()
         delay = amount * _UNIT_SECONDS[unit]
         remainder = (text[:m.start()] + text[m.end():]).strip()
@@ -105,6 +166,77 @@ def find_time_expression(text: str) -> Optional[Tuple[float, str, str]]:
         remainder = re.sub(r"\s{2,}", " ", remainder).strip(" ,.")
         return delay, m.group(0), remainder
 
+    return None
+
+
+# BETA 0.3.48: a bare "set a timer for 10 minutes" / "remind me in 20
+# minutes" has no real dispatchable command in it -- there's nothing to
+# RUN when it fires, just something to tell the user. Before this,
+# find_time_expression()'s remainder ("set a timer for", "remind me",
+# "wake me up") got treated as SCHEDULE_COMMAND's command_text and
+# blindly re-run through the full classify/dispatch pipeline at fire
+# time (see orchestrator.py's _on_fire) -- which has no more idea what
+# "remind me" means THEN than it does right now, so it silently
+# defaulted to web-searching the phrase "remind me" the moment the timer
+# actually went off. Confirmed directly against extract_slots().
+#
+# This is deliberately a small, explicit phrase set (same "curated
+# table, not a classifier" posture as synonyms.py) rather than an
+# attempt to detect "any remainder that isn't a real command" generally
+# -- that's exactly the open-set problem graph_router.py's
+# CONFIDENCE_THRESHOLD comment already documents as unsolvable by
+# pattern-matching alone. This only needs to catch the specific, narrow,
+# extremely common shape of "there's a timer word and nothing else
+# actionable," not classify arbitrary remainders.
+# BETA 0.3.49 fix: the leading article group only accepted "a"/"the"
+# (missing "an" -- "an alarm" doesn't match a|the), and the only accepted
+# lead-in verb was "set" -- "give me a reminder" isn't shaped like
+# anything this regex recognizes at all, so it fell through to the exact
+# 0.3.48 bug (remainder "give me a reminder" gets scheduled and re-run
+# verbatim at fire time) instead of being caught as a bare timer.
+# Confirmed live for both gaps. "give me" is added as a second accepted
+# lead-in alongside "set" -- still a small, curated set of real phrasings
+# (same posture as the rest of this table), not a general verb-detector.
+_BARE_TIMER_REMAINDER_RE = re.compile(
+    r"^(?:(?:set|give\s+me)\s+(?:a|an|the)?\s*)?(?:a|an|the)?\s*"
+    r"(timer|reminder|alarm|remind\s*me|wake\s*me(\s*up)?|notify\s*me|alert\s*me)$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_bare_timer(text: str) -> Optional[Tuple[float, str]]:
+    """Returns (delay_seconds, label) if `text` is a bare timer/reminder
+    request with no real command attached (e.g. "set a timer for 10
+    minutes", "remind me in 20 minutes"), else None. `label` is whatever
+    was left after stripping the trigger phrase itself (e.g. "check the
+    oven" from "remind me in 10 minutes to check the oven") -- used only
+    for the notification text, never re-executed as a command, which is
+    the actual fix (see module comment above)."""
+    found = find_time_expression(text)
+    if not found:
+        return None
+    delay_seconds, _span, remainder = found
+    remainder = re.sub(r"^(please\s+|can you\s+|could you\s+)", "", remainder, flags=re.IGNORECASE).strip()
+    # NOTE: an EMPTY remainder ("in 10 minutes" with nothing else at all)
+    # deliberately does NOT count as a bare timer, even though it "has
+    # nothing to run" same as the cases below -- there's no actual
+    # timer/reminder/alarm word anywhere, so this is exactly as likely to
+    # be a truncated real command (a slot-extraction miss on something
+    # like "shut down in 10 minutes" typed oddly) as it is a timer
+    # request. Confirmed by test_scheduling_and_conditionals.py's
+    # existing test_bare_time_expression_asks_instead_of_guessing: that
+    # ambiguous case is SUPPOSED to fall through to SCHEDULE_COMMAND and
+    # ask "what should I do, and when?", not silently guess either way.
+    if remainder and _BARE_TIMER_REMAINDER_RE.match(remainder):
+        return delay_seconds, ""
+    # "remind me to check the oven" / "remind me to walk the dog" --
+    # trigger phrase PLUS a real label to show back at fire time.
+    m = re.match(
+        r"^(?:remind\s*me|notify\s*me|alert\s*me)\s+(?:to\s+)?(.+)$",
+        remainder, re.IGNORECASE,
+    )
+    if m:
+        return delay_seconds, m.group(1).strip()
     return None
 
 
@@ -194,14 +326,44 @@ def looks_like_cancel_scheduled(text: str) -> bool:
 # vocabulary with the graph at all, so it can't cause that class of
 # collision -- same reasoning as looks_like_cancel_scheduled() above
 # avoiding "stop"/"close"/"end" for the same reason.
+#
+# BETA 0.3.49: "recording" removed from the bare/unqualified branch below.
+# Root cause of a real bug (confirmed): this used to be
+# r"\b(start|begin)\b.*\b(seeing|watching|recording)\b|..." -- which means
+# a completely bare "start recording" ALWAYS matched here unconditionally,
+# silently claiming it for macro capture, even when someone meant dictation
+# ("start recording what I say"). "seeing"/"watching" stay unqualified --
+# START_LISTENING never uses those words, so there's no genuine ambiguity
+# there. "recording" only counts as a macro trigger now when paired with
+# its own object (do/click/type), mirroring the second branch that already
+# existed. The genuinely bare, no-object "start recording" case is now
+# caught separately by looks_like_ambiguous_start_recording() below and
+# asked about instead of silently guessed -- see that function's docstring.
+# BETA 0.3.49: added a "my clicks" branch. Confirmed live: "start
+# recording my clicks" -- despite "clicks" being an unambiguous macro
+# signal on its own -- fell through to looks_like_ambiguous_start_
+# recording() and asked a question that had only one sane answer,
+# instead of resolving deterministically, because the existing
+# "(everything|what) I (do|click|type)" branch only recognized "what I
+# click", not "my clicks". "clicks"/"my clicks" never means dictation, so
+# this can resolve directly without asking.
 _START_SEEING_RE = re.compile(
-    r"\b(start|begin)\b.*\b(seeing|watching|recording)\b|"
-    r"\b(watch|record)\b.*\b(everything|what)\s+i\s+(do|click|type)\b",
+    r"\b(start|begin)\b.*\b(seeing|watching)\b|"
+    r"\b(start|begin)\b.*\brecording\b.*\b(everything|what)\s+i\s+(do|click|type)\b|"
+    r"\b(watch|record)\b.*\b(everything|what)\s+i\s+(do|click|type)\b|"
+    r"\brecord(ing)?\b.*\bmy\s+clicks?\b",
     re.IGNORECASE,
 )
 
+# BETA 0.3.49: same "recording" carve-out as _START_SEEING_RE above, and
+# for the same reason -- a bare "stop recording" no longer assumes macro.
+# Runtime state (is a macro recorder actually active? is dictation?) is a
+# much better disambiguator than text for the STOP case specifically,
+# since by the time someone says "stop," something is actually running --
+# see looks_like_ambiguous_stop_recording() / orchestrator.py's use of
+# app_controller._active_recorder / _active_dictation.
 _STOP_SEEING_RE = re.compile(
-    r"\bstop\b.*\b(seeing|watching|recording)\b|"
+    r"\bstop\b.*\b(seeing|watching)\b|"
     r"\bsave\b.*\bmacro\b|"
     r"\b(that'?s|thats)\s+(it|everything)\b.*\bsave\b",
     re.IGNORECASE,
@@ -214,6 +376,228 @@ def looks_like_start_seeing(text: str) -> bool:
 
 def looks_like_stop_seeing(text: str) -> bool:
     return bool(_STOP_SEEING_RE.search(text.strip()))
+
+
+# Same reasoning/precedent as _START_SEEING_RE/_STOP_SEEING_RE just above:
+# "start"/"stop" are extremely common words that would distort
+# LAUNCH_APP/KILL_PROCESS's own Tier A graph scoring if "start listening"-
+# shaped phrasings were added there instead -- confirmed live for the
+# seeing/watching case, and "listening" carries the exact same risk (it's
+# arguably worse: "listen" is closer to ordinary conversational English
+# than "seeing"/"watching" already are). Same fix: a dedicated pre-check
+# here, bypassing graph_router.py's Tier A entirely, same as start/stop
+# seeing above.
+#
+# BETA 0.3.49: added the "record(ing) ... what/everything I say" branch,
+# mirroring _START_SEEING_RE's "record(ing) ... what I do/click" branch --
+# same real object-word disambiguation, just the voice side of it. Bare
+# "recording" alone still does NOT match here (never did) -- only when
+# "say" is the stated object.
+#
+# Fixed live bug (confirmed): the "record ... record(ing) ..." branch
+# required TWO separate record-root words in the sentence (one for its
+# own opening (start|begin|record) group, another for the literal
+# "record(ing)?" right after) -- so a bare "record what I say" /
+# "record everything I say", which only contains ONE "record" word,
+# matched neither this branch nor the "start|begin ... everything/what I
+# say" branch (no start/begin present either), and fell all the way
+# through to a plain miss. Replaced that double-counting branch with a
+# single-occurrence "record(ing)? ... (everything|what) I say" branch --
+# it still matches "start recording everything I say" (start/begin is
+# just not required by this branch, "record" alone is) without requiring
+# the word to appear twice.
+_START_LISTENING_RE = re.compile(
+    r"\b(start|begin)\b.*\b(listening|dictating|dictation)\b|"
+    r"\bstart\s+listening\b|"
+    r"\brecord(ing)?\b.*\b(everything|what)\s+i\s+say\b|"
+    r"\b(start|begin)\b.*\b(everything|what)\s+i\s+say\b",
+    re.IGNORECASE,
+)
+
+_STOP_LISTENING_RE = re.compile(
+    r"\bstop\b.*\b(listening|dictating|dictation)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_start_listening(text: str) -> bool:
+    return bool(_START_LISTENING_RE.search(text.strip()))
+
+
+def looks_like_stop_listening(text: str) -> bool:
+    return bool(_STOP_LISTENING_RE.search(text.strip()))
+
+
+# BETA 0.3.56: "function" is a near-unambiguous signal for GENERATE_FILE
+# in this app's vocabulary -- nothing else TOKI does has any other use
+# for that specific word. Confirmed live, matching STATUS.md's own
+# 0.3.55 disclosure: "create a function called calculator" scored only
+# 0.285 against graph_router.py's 0.5 CONFIDENCE_THRESHOLD for
+# GENERATE_FILE, because the query's own TF-IDF vector gets diluted by
+# "calculator" (or any specific name) not appearing in ANY phrasing's
+# vocabulary -- a name necessarily does this to some degree, and no
+# amount of corpus-tuning fully closes it (see that entry's own "not yet
+# fixed" note, which flagged exactly this as the architecturally cleaner
+# fix and deferred it pending review).
+#
+# Rather than keep fighting the corpus, this is a dedicated pre-check
+# that bypasses Tier A's graph scoring entirely for anything mentioning
+# "function" -- same "fixed phrase-shape, not a classifier" posture this
+# file already uses for looks_like_start_seeing()/looks_like_bare_timer()
+# above, and the same underlying reasoning as MAKE_FOLDER's own
+# _NAME_FROM_OUTSIDE_VOCAB_INTENTS whitelist in orchestrator.py: a
+# user-supplied name is structurally unpredictable text no amount of
+# training phrasings can vocabulary-cover.
+#
+# Deliberately narrow to exactly the word "function" -- doesn't touch
+# "folder"/"file"/"script"/"program" at all. Those already have real,
+# working graph vocabulary and their own established intents (MAKE_FOLDER,
+# MAKE_FILE, GENERATE_FILE's own "script"/"program"/"code" phrasings),
+# so a plain "make a folder called Homework" or "write a script for this"
+# is completely unaffected by this check and keeps routing exactly as it
+# already does. Only "function" gets this treatment, per the explicit
+# ask: function creation should be near-exclusive to GENERATE_FILE,
+# something as specific as a folder should not be swept in.
+_GENERATE_FUNCTION_RE = re.compile(r"\bfunction\b", re.IGNORECASE)
+
+# BETA 0.3.56 follow-up: "function" alone isn't actually unambiguous --
+# a real file can be literally named "function" ("open function.py",
+# "delete the file called function", "rename function.py to helper.py").
+# looks_like_function_creation() below must NOT steal those away from
+# DELETE_ITEM/READ_FILE/OPEN_ITEM/RENAME_ITEM/etc. -- that would be the
+# exact same class of bug this whole file's history keeps finding
+# (misrouting a legitimate file-target intent). Two signals distinguish
+# "function" the code-generation noun from "function" the literal
+# filename:
+#
+# 1. A real creation verb (write/create/make/build/generate/code)
+#    anywhere in the message -- confidently means the request IS about
+#    generating code, whatever else is in the sentence. Always wins.
+# 2. Absent that, "function" reads as an existing FILE being targeted
+#    when it's either (a) immediately followed by a file extension
+#    (function.py, function.txt, ...), (b) quoted as a literal name, or
+#    (c) the message opens with one of the same file-management verbs
+#    _BARE_PATH_LEADING_VERB_RE already recognizes for exactly this
+#    purpose elsewhere in this file. Any of those, with no creation verb
+#    present, means this isn't a generation request -- fall through to
+#    normal routing instead.
+_FUNCTION_CREATION_VERB_RE = re.compile(
+    r"\b(write|create|make|build|generate|code)\b", re.IGNORECASE,
+)
+_FUNCTION_AS_EXISTING_FILE_RE = re.compile(
+    r"\bfunction\.[a-z0-9]{1,6}\b|"           # function.py, function.txt, ...
+    r"['\"]function['\"]|"                    # a quoted literal name
+    r"^(?:please\s+)?(?:delete|remove|erase|read|open|view|show|display|"
+    r"list|find|search|rename|move|copy)\b.*\bfunction\b",
+    re.IGNORECASE,
+)
+
+# BUGFIX (found live while re-verifying 0.3.56, not caught by its own test
+# suite): the header comment above claims "doesn't touch folder/file/
+# script/program at all", but the code never actually enforced that once a
+# creation verb was present -- "make a folder called function" ALSO
+# contains a creation verb ("make"), so rule 1 ("a creation verb always
+# wins") fired and stole it into GENERATE_FILE, exactly the misroute the
+# comment says can't happen. Confirmed live end-to-end via
+# _process_single_request(): router.classify() was never even called,
+# generate_and_save("make a folder called function") was. The existing
+# regression test (test_extractor.py) only checked "make a folder called
+# Homework" -- which never contains the word "function" at all, so it
+# could never have caught this.
+#
+# Fix: when "function" is clearly being used as the NAME of some other
+# explicitly-typed thing (a folder/file/script/program/directory), that
+# explicit type wins over the generic creation-verb rule, full stop --
+# "make a folder called function" is a folder request; the fact that
+# "make" is also a creation verb doesn't change what's being created.
+# Two shapes catch this:
+#   1. "called/named function" (or a quoted "function") alongside any of
+#      those five type words anywhere in the message -- "function" is
+#      the *name*, the other word is the *type*.
+#   2. "function" immediately followed by one of those type words
+#      ("function folder", "function script") -- same relationship,
+#      reversed word order.
+# This check runs BEFORE the creation-verb check, so it overrides rule 1
+# rather than being overridden by it.
+_OTHER_CREATION_TARGET_RE = re.compile(
+    r"\b(?:folder|file|script|program|directory)\b", re.IGNORECASE,
+)
+_FUNCTION_AS_NAME_OF_OTHER_TARGET_RE = re.compile(
+    r"\b(?:called|named)\s+['\"]?function['\"]?\b|"   # "called/named function"
+    r"['\"]function['\"]|"                             # quoted "function"
+    r"\bfunction\s+(?:folder|file|script|program|directory)\b|"  # "function folder"
+    r"\b(?:folder|file|script|program|directory)\s+function\b",  # "folder function"
+    re.IGNORECASE,
+)
+
+
+def looks_like_function_creation(text: str) -> bool:
+    stripped = text.strip()
+    if not _GENERATE_FUNCTION_RE.search(stripped):
+        return False
+    if (_FUNCTION_AS_NAME_OF_OTHER_TARGET_RE.search(stripped)
+            and _OTHER_CREATION_TARGET_RE.search(stripped)):
+        return False
+    if _FUNCTION_AS_EXISTING_FILE_RE.search(stripped) and not _FUNCTION_CREATION_VERB_RE.search(stripped):
+        return False
+    return True
+
+
+# BETA 0.3.49: the genuinely irreducible case -- "start recording" (or
+# "begin recording") with NO companion word telling us which of the two
+# real features it means. This is deliberately NOT another attempt to
+# guess harder (see graph_router.py's CONFIDENCE_THRESHOLD docstring, and
+# STATUS.md's 0.3.47/0.3.48 entries, for two separate confirmations this
+# session that closed-vocabulary heuristics have a real ceiling on this
+# exact class of problem). "Recording clicks for a macro" and "recording
+# what I say" are both completely valid readings of the bare phrase --
+# there's no text-level signal left to lean on once seeing/watching/
+# listening/dictating/say/do/click/type are all absent, so the honest
+# answer is to ask once, the same "false-positive dispatch is worse than
+# an extra clarifying question" principle categories.py already documents
+# for the graph/LLM tier.
+#
+# Deliberately checked by the caller AFTER looks_like_start_seeing() and
+# looks_like_start_listening() both return False, so it only ever fires on
+# the true leftover case -- it can never steal a phrasing that already had
+# a real answer.
+# BETA 0.3.49: widened to also catch a bare "record ..." with no leading
+# "start"/"begin" at all (e.g. "record my screen"). Confirmed live: this
+# used to require "start"/"begin" literally in the text, so a bare
+# imperative fell through to a raw miss (silent web search) instead of
+# reaching this "ask once" fallback -- the exact failure mode this
+# function exists to prevent. Safe to widen: this check only ever runs
+# (see orchestrator.py's call site) AFTER looks_like_start_seeing() and
+# looks_like_start_listening() have both already returned False, so by
+# the time bare "record"/"recording" reaches here, any phrasing with a
+# real do/click/type/clicks/say object has already been resolved
+# deterministically above -- nothing this widening newly matches was ever
+# a genuinely resolvable case.
+_AMBIGUOUS_START_RECORDING_RE = re.compile(
+    r"\b(start|begin)\b.*\brecording\b|\brecord(ing)?\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_ambiguous_start_recording(text: str) -> bool:
+    return bool(_AMBIGUOUS_START_RECORDING_RE.search(text.strip()))
+
+
+# Mirror of the above for "stop" -- but see orchestrator.py's actual use
+# of this: by the time someone says "stop," something is (or isn't)
+# genuinely running, which is real information a "start" check never has.
+# The orchestrator checks this ONLY as a last resort, after checking
+# app_controller's actual _active_recorder / _active_dictation state --
+# this regex exists just to recognize the bare "stop recording" shape in
+# the first place, not to resolve which one.
+_AMBIGUOUS_STOP_RECORDING_RE = re.compile(
+    r"\bstop\b.*\brecording\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_ambiguous_stop_recording(text: str) -> bool:
+    return bool(_AMBIGUOUS_STOP_RECORDING_RE.search(text.strip()))
 
 
 
@@ -259,69 +643,86 @@ def _resolve_real_desktop_path() -> str:
     return _desktop_path_cache
 
 
-# The installer writes this file based on the drives/folders the user
-# picked during setup. Format: {"roots": ["D:\\", "E:\\Projects", ...]}.
-# Missing/unreadable/empty -> falls back to the original D:\ -only default
-# below, so a dev checkout or a manual `pip install` with no installer
-# involved behaves exactly like it always did.
-_SANDBOX_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "sandbox_config.json"
-_sandbox_config_roots_cache: Optional[List[str]] = None
-
-
-def _load_configured_sandbox_roots() -> List[str]:
-    """Reads the installer-written root list, once, cached for the process
-    lifetime (same "fetch once, cache" convention as apis.py's
-    LocationCache / app_control.py's installed-apps cache). Never raises --
-    any problem with the file just means "nothing configured"."""
-    global _sandbox_config_roots_cache
-    if _sandbox_config_roots_cache is not None:
-        return _sandbox_config_roots_cache
-
-    roots: List[str] = []
+def _load_configured_roots() -> Optional[List[str]]:
+    """
+    Reads the installer-provided allow-list at config/sandbox_config.json,
+    e.g. {"roots": ["D:\\", "C:\\Users\\Alex\\Documents\\TOKI"]}. Returns
+    None (not an empty list) on anything short of a clean, non-empty,
+    well-formed read, so the caller can fall back to the hardcoded
+    default cleanly instead of accidentally sandboxing to nothing.
+    """
     try:
         with open(_SANDBOX_CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        raw = data.get("roots")
-        if isinstance(raw, list):
-            roots = [ntpath.normpath(r) for r in raw if isinstance(r, str) and r.strip()]
+        roots = data.get("roots")
+        if not isinstance(roots, list) or not roots:
+            return None
+        cleaned = [ntpath.normpath(r) for r in roots if isinstance(r, str) and r.strip()]
+        return cleaned or None
     except Exception:
-        roots = []
+        # Missing file, bad JSON, wrong shape -- all treated the same:
+        # fall back to the default below. This file is entirely optional.
+        return None
 
-    _sandbox_config_roots_cache = roots
-    return roots
+
+def get_desktop_root() -> str:
+    """
+    The real Desktop path specifically -- used by anything that wants
+    "put this on the Desktop" regardless of what else is in the sandbox
+    allow-list (e.g. video_downloader's default download folder). NOT
+    the same as "the second entry in get_sandbox_roots()" -- that
+    assumption broke once the roots list became installer-configurable
+    and Desktop's position in it is no longer guaranteed.
+    """
+    return _resolve_real_desktop_path()
 
 
 def get_sandbox_roots() -> List[str]:
     """
-    Every tree TOKI is allowed to touch. The real Desktop (resolved via
-    Windows' own known-folder API, not assumed from %USERPROFILE%) is
-    ALWAYS included -- that's the one root no installer choice can remove,
-    since it's the natural "just works, no setup" default. On top of that:
-    whatever drives/folders the installer's wizard page wrote to
-    config/sandbox_config.json, or a bare D:\\ if that file isn't present
-    at all (unconfigured dev checkout / manual install, matching this
-    project's original behavior before the installer existed).
+    The set of trees TOKI is allowed to read/write. Defaults to the
+    non-Windows data drive (D:\\) and the user's ACTUAL Desktop (resolved
+    via Windows' known-folder API, not assumed from %USERPROFILE%) --
+    but if the installer collected a different allow-list from the user
+    (config/sandbox_config.json), that list is used instead. Everything
+    outside the active roots is off-limits — no app-launching, no
+    System32, no Program Files.
 
     Uses ntpath explicitly (not os.path) since this app only ever runs on
     Windows, regardless of what platform it's developed/tested on.
     """
-    configured = _load_configured_sandbox_roots()
-    roots = configured if configured else [ntpath.normpath(r"D:\\")]
-
-    desktop = _resolve_real_desktop_path()
-    if not any(r.lower() == desktop.lower() for r in roots):
-        roots.append(desktop)
-    return roots
+    configured = _load_configured_roots()
+    if configured:
+        return configured
+    return [ntpath.normpath(r"D:\\"), _resolve_real_desktop_path()]
 
 
 def is_within_sandbox(path: str) -> bool:
-    """Reject anything that resolves outside the sandbox roots, including via '..' traversal."""
+    """Reject anything that resolves outside the sandbox roots, including via '..' traversal.
+
+    BETA 0.3.44 fix: root strings from get_sandbox_roots() are now
+    ntpath-normalized here too, not just the path being checked. Never
+    surfaced before because production's own get_sandbox_roots() already
+    returns pre-normalized Windows-style strings (ntpath.normpath(r"D:\\")
+    and _resolve_real_desktop_path()'s own Windows API result) -- but any
+    test (or future caller) that monkeypatches get_sandbox_roots() to a
+    raw POSIX-style path (e.g. a pytest tmp_path fixture, the same
+    pattern tests/test_file_index.py's own `sandbox` fixture already
+    uses for FileIndex) silently failed every check: ntpath.normpath()
+    turns "/tmp/x/Desktop" into "\\tmp\\x\\desktop" for the PATH being
+    checked, but the un-normalized ROOT string still had forward
+    slashes, so the two never matched. Normalizing both sides the same
+    way fixes that -- a no-op on already-normalized production roots,
+    real for anything else.
+    """
     try:
         resolved = ntpath.normpath(path).lower()
     except Exception:
         return False
     for root in get_sandbox_roots():
-        root_stripped = root.lower().rstrip("\\")
+        try:
+            root_stripped = ntpath.normpath(root).lower().rstrip("\\")
+        except Exception:
+            continue
         if resolved == root_stripped or resolved.startswith(root_stripped + "\\"):
             return True
     return False
@@ -464,7 +865,7 @@ def resolve_path(raw: str, default_root: Optional[str] = None) -> Optional[str]:
     if ntpath.isabs(raw) or re.match(r"^[A-Za-z]:\\", raw):
         candidate = ntpath.normpath(raw)
     else:
-        root = default_root or get_sandbox_roots()[1]  # Desktop by default
+        root = default_root or get_desktop_root()  # Desktop by default
         candidate = ntpath.normpath(ntpath.join(root, raw))
 
     return candidate if is_within_sandbox(candidate) else None
@@ -520,11 +921,109 @@ def _extract_name(text: str) -> Optional[str]:
     return None
 
 
+# ── ORGANIZE_FILES_BY_TOPIC / GROUP_FILES_BY_EXTENSION helpers ─────────────
+#
+# Kept together and near each other deliberately -- these two intents look
+# superficially similar in casual phrasing ("organize"/"put in a folder")
+# but are handled with opposite postures: ORGANIZE_FILES_BY_TOPIC infers a
+# destination from evidence (file_graph/), so it never needs to ask for
+# anything up front; GROUP_FILES_BY_EXTENSION is a fully explicit
+# instruction with two required slots, so a miss on either means "ask",
+# never "guess". See each intent's own branch in extract_slots() below.
+
+_ORGANIZE_INCLUDE_SUGGESTIONS_RE = re.compile(
+    r"including suggestions|include suggestions|include the suggested"
+    r"|suggested ones? too|be more aggressive|the maybes? too",
+    re.IGNORECASE,
+)
+
+# Deliberately narrow: only "folder named X" / "folder called X", and only
+# a SINGLE token for X (no spaces) -- see extract_slots()'s own
+# GROUP_FILES_BY_EXTENSION branch docstring for why a genuinely reliable
+# multi-word folder-name capture isn't attempted here (this file has no
+# real language understanding, so extending to multi-word names risks
+# swallowing trailing filler like "folder named rezero please" as the
+# name itself; a miss here just means the intent falls through to None
+# and the user gets asked, which is the safe outcome either way).
+_GROUP_DEST_FOLDER_RE = re.compile(
+    r"folder\s+(?:named|called)\s+[\"']?([A-Za-z0-9][\w\-]*)[\"']?",
+    re.IGNORECASE,
+)
+
+# Known file-type words -> real extensions. Both singular and plural forms
+# are listed explicitly (rather than stripping a trailing "s" in code)
+# so a word like "this" or "gps" is never accidentally mangled by a
+# generic singularization rule.
+_EXTENSION_WORD_MAP = {
+    "pdf": [".pdf"], "pdfs": [".pdf"],
+    "json": [".json"],
+    "image": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"],
+    "images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"],
+    "photo": [".jpg", ".jpeg", ".png"], "photos": [".jpg", ".jpeg", ".png"],
+    "picture": [".jpg", ".jpeg", ".png"], "pictures": [".jpg", ".jpeg", ".png"],
+    "doc": [".doc", ".docx"], "docs": [".doc", ".docx"],
+    "word": [".doc", ".docx"],
+    "text": [".txt"], "txt": [".txt"], "txts": [".txt"],
+    "excel": [".xls", ".xlsx"],
+    "spreadsheet": [".xls", ".xlsx"], "spreadsheets": [".xls", ".xlsx"],
+    "zip": [".zip"], "zips": [".zip"],
+    "archive": [".zip", ".rar", ".7z"], "archives": [".zip", ".rar", ".7z"],
+    "video": [".mp4", ".mov", ".mkv", ".avi"], "videos": [".mp4", ".mov", ".mkv", ".avi"],
+    "audio": [".mp3", ".wav", ".flac", ".m4a"], "music": [".mp3", ".wav", ".flac", ".m4a"],
+    "csv": [".csv"], "csvs": [".csv"],
+    "powerpoint": [".ppt", ".pptx"], "ppt": [".ppt", ".pptx"], "pptx": [".pptx"],
+}
+
+# Fallback for a type-word not in the dict above, used ONLY in the shape
+# "<word> file(s)" (e.g. "csv files", "log files") -- the word directly
+# preceding "file(s)" becomes its own literal extension. Guarded by
+# _EXTENSION_FALLBACK_STOPWORDS so generic phrasing like "all the files"
+# or "these files" doesn't get misread as an extension named "the"/"these".
+_GENERIC_EXT_FILES_RE = re.compile(r"\b([a-z][a-z0-9]{1,4})s?\s+files?\b", re.IGNORECASE)
+_EXTENSION_FALLBACK_STOPWORDS = frozenset({
+    "the", "all", "my", "these", "those", "some", "any", "loose", "other",
+    "more", "new", "old", "such", "same", "rest", "remaining",
+})
+
+
+def _extract_extensions(text: str) -> List[str]:
+    """Returns real, deduped, lowercase extensions (with leading dot)
+    mentioned in `text`, in first-seen order. Empty list means "couldn't
+    confidently tell which file types" -- the caller treats that as an
+    extraction miss (ask), never a guess at "all files"."""
+    lower = text.lower()
+    found: List[str] = []
+    for word in sorted(_EXTENSION_WORD_MAP, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(word)}\b", lower):
+            for ext in _EXTENSION_WORD_MAP[word]:
+                if ext not in found:
+                    found.append(ext)
+    for m in _GENERIC_EXT_FILES_RE.finditer(lower):
+        word = m.group(1)
+        if word in _EXTENSION_FALLBACK_STOPWORDS:
+            continue
+        ext = f".{word}"
+        if ext not in found:
+            found.append(ext)
+    return found
+
+
 def _default_root_for(text: str) -> str:
+    # Desktop is the default when nothing else is said -- resolved
+    # directly rather than assumed from roots list position, since a
+    # user-configured allow-list may not include Desktop at all or may
+    # not put it second. If "D:\" was mentioned explicitly, only honor
+    # it when D:\ is actually one of the active sandbox roots; otherwise
+    # fall back to the first configured root so an explicit mention
+    # doesn't silently escape a custom allow-list.
     roots = get_sandbox_roots()
     if _ON_D_DRIVE_RE.search(text):
+        d_drive = ntpath.normpath(r"D:\\")
+        for root in roots:
+            if ntpath.normpath(root).lower() == d_drive.lower():
+                return root
         return roots[0]
-    return roots[1]  # Desktop is the default when nothing else is said
+    return get_desktop_root() if get_desktop_root() in roots else roots[0]
 
 
 # BETA 0.3.27 fix -- confirmed live: the OLD single regex's drive-letter
@@ -770,9 +1269,14 @@ _KNOWN_FORMAT_WORDS = {
     "text": "txt", "txt": "txt", "json": "json", "csv": "csv", "tsv": "tsv",
     "xml": "xml", "yaml": "yaml", "yml": "yml", "markdown": "md", "md": "md",
     "png": "png", "jpg": "jpg", "jpeg": "jpg", "webp": "webp", "bmp": "bmp",
-    "gif": "gif", "tiff": "tiff", "ico": "ico",
+    "gif": "gif", "tiff": "tiff", "ico": "ico", "ppm": "ppm", "pcx": "pcx", "tga": "tga",
     "word": "docx", "docx": "docx", "pdf": "pdf", "html": "html", "htm": "html",
     "rtf": "rtf", "odt": "odt", "zip": "zip",
+    "powerpoint": "pptx", "pptx": "pptx", "epub": "epub",
+    "tar": "tar", "tgz": "tgz", "tarball": "tar.gz",
+    "ini": "ini", "conf": "conf", "toml": "toml",
+    "mp3": "mp3", "wav": "wav", "flac": "flac", "aac": "aac", "ogg": "ogg", "m4a": "m4a",
+    "mp4": "mp4", "mkv": "mkv", "webm": "webm", "mov": "mov", "avi": "avi",
 }
 
 _FORMAT_WORD_RE = re.compile(
@@ -852,6 +1356,41 @@ def _extract_compress_quality(text: str) -> str:
     if re.search(r"\bslightly|a (little|bit)\b", text, re.IGNORECASE):
         return "80"
     return ""
+
+
+# ── Video download intents ──────────────────────────────────────────────────
+#
+# "download this video" / "grab that as mp3" -- url comes either straight
+# out of the user's own message (a pasted link) or, for
+# DOWNLOAD_PLAYING_VIDEO, from video_downloader.now_playing's UI-Automation
+# read of the focused browser's address bar (resolved in apis.py, not here --
+# this module stays a pure function of user_text, same contract as every
+# other intent).
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+
+_AUDIO_ONLY_RE = re.compile(
+    r"\b(just the audio|audio only|only the audio|as (?:an?\s+)?mp3|"
+    r"extract (?:the\s+)?audio|convert (?:it\s+)?to (?:an?\s+)?mp3)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_url(text: str) -> Optional[str]:
+    """Pulls the first http(s) link out of free text, trimming trailing
+    punctuation a sentence would naturally add around a pasted URL (a
+    period ending the sentence, a closing paren/quote). Returns None if no
+    link is present -- never guesses one from a bare video title."""
+    m = _URL_IN_TEXT_RE.search(text)
+    if not m:
+        return None
+    return m.group(0).rstrip(".,)\"'\u201d\u2019")
+
+
+def _extract_audio_only(text: str) -> str:
+    """Returns \"true\" if the user asked for audio-only, else \"\" (the
+    caller/API defaults to full video) -- same empty-string-means-\"not
+    stated\" convention _extract_compress_quality() above already uses."""
+    return "true" if _AUDIO_ONLY_RE.search(text) else ""
 
 
 def resolve_selected_file_target(intent: str, selected: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
@@ -1483,6 +2022,18 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
             return None
         return {"command_text": remainder, "delay_seconds": str(delay_seconds)}
 
+    if intent == "SET_TIMER":
+        # orchestrator.py only routes here after looks_like_bare_timer()
+        # already confirmed this text matches -- re-run it for the same
+        # reason SCHEDULE_COMMAND above re-runs find_time_expression(),
+        # keeping this function a pure re-derivation of user_text with no
+        # hidden state, same contract as every other branch here.
+        found = looks_like_bare_timer(text)
+        if not found:
+            return None
+        delay_seconds, label = found
+        return {"delay_seconds": str(delay_seconds), "label": label}
+
     if intent == "CANCEL_SCHEDULED":
         # Accepts an explicit ID ("cancel S2") or a free-text description
         # ("cancel the shutdown") -- scheduler.py's own cancel() does the
@@ -1539,6 +2090,24 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
     if intent == "EXTRACT_SELECTED_FILE":
         return {}
 
+    if intent == "DOWNLOAD_VIDEO_URL":
+        url = _extract_url(text)
+        # No sensible default here (unlike RESIZE's shrink-by-50%) -- a
+        # download with no link at all has nothing to act on, so this
+        # routes through MISSING_SLOT_QUESTIONS same as CONVERT_SELECTED_FILE's
+        # missing target_format does.
+        if not url:
+            return None
+        return {"url": url, "audio_only": _extract_audio_only(text)}
+
+    if intent == "DOWNLOAD_PLAYING_VIDEO":
+        # No required slot -- "download this" / "grab what I'm watching"
+        # is a complete instruction on its own; VideoDownloadAPI resolves
+        # the actual URL itself via now_playing.get_now_playing_url() at
+        # dispatch time, same "resolve against current state, not a stale
+        # slot" pattern FileConvertAPI already uses for selection_context.
+        return {"audio_only": _extract_audio_only(text)}
+
     if intent in ("MAKE_FOLDER", "MAKE_FILE"):
         name = _extract_name(text)
         if not name:
@@ -1586,6 +2155,44 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
             return None
         path = resolve_path(name, _default_root_for(text))
         return {"path": path} if path else None
+
+    if intent == "ORGANIZE_FILES_BY_TOPIC":
+        # Same "no explicit name -> operate on the default root" fallback
+        # LIST_FILES/SORT_FOLDER_BY_TYPE use just above -- "organize my
+        # desktop"/"organize this" both need to resolve to a real path
+        # without the user having to spell one out. Unlike those two
+        # intents, though, this ALWAYS returns a usable dict (never None) --
+        # there's no required slot here that could plausibly be missing,
+        # `path` always has a default and `include_suggestions` is a pure
+        # opt-in flag, not something worth pausing the turn to ask about.
+        name = _extract_name(text)
+        if not name:
+            bare = _extract_bare_path(text)
+            name = bare if bare and _looks_like_real_name(bare) else None
+        path = resolve_path(name, _default_root_for(text)) if name else _default_root_for(text)
+        include_suggestions = "true" if _ORGANIZE_INCLUDE_SUGGESTIONS_RE.search(text) else ""
+        return {"path": path or _default_root_for(text), "include_suggestions": include_suggestions}
+
+    if intent == "GROUP_FILES_BY_EXTENSION":
+        # Deliberately the OPPOSITE extraction posture from
+        # ORGANIZE_FILES_BY_TOPIC just above: this intent is a fully
+        # explicit instruction ("put the pdfs and json files in a folder
+        # named rezero") with no evidence-based inference at all, so BOTH
+        # slots here are required and a miss on either returns None (ask
+        # the user) rather than guessing a folder name or a file type from
+        # thin air -- same never-guess posture as the rest of this file.
+        dest_m = _GROUP_DEST_FOLDER_RE.search(text)
+        dest_name = dest_m.group(1).strip() if dest_m else None
+        if not dest_name or not _looks_like_real_name(dest_name):
+            return None
+        extensions = _extract_extensions(text)
+        if not extensions:
+            return None
+        return {
+            "path": _default_root_for(text),
+            "extensions": ",".join(extensions),
+            "dest_name": dest_name,
+        }
 
     if intent == "RENAME_ITEM":
         m = re.search(r"rename\s+(.+?)\s+to\s+(.+)$", text, re.IGNORECASE)
@@ -1816,6 +2423,20 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
             return None
         return {"text": typed_text, "target_description": target}
 
+    if intent == "START_LISTENING":
+        # target_description is OPTIONAL (see intents_app_control.py's
+        # entry) -- always returns a dict, never None, so this can never
+        # trigger MISSING_SLOT_QUESTIONS's forced follow-up. An empty
+        # target just means start_dictation() falls back to its own
+        # focused-element/click-to-resolve logic instead of a named one.
+        m = re.search(
+            r"\b(?:start|begin)\s+(?:listening|dictating|dictation)\b\s*"
+            r"(?:in(?:to)?|on)\s+(?:the\s+)?(.+?)$",
+            text, re.IGNORECASE,
+        )
+        target = m.group(1).strip().strip("'\"") if m else ""
+        return {"target_description": target}
+
     # No slots needed for this intent.
     return {}
 
@@ -1834,10 +2455,12 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
 # from a paraphrase.
 MISSING_SLOT_QUESTIONS: Dict[str, str] = {
     "SCHEDULE_COMMAND": "What should I do, and when? (e.g. 'shut down in 10 minutes')",
+    "SET_TIMER": "How long should the timer be? (e.g. 'set a timer for 10 minutes')",
     "CANCEL_SCHEDULED": "Which scheduled command should I cancel? (give me its ID, like S1, or describe it)",
     "CONDITIONAL_COMMAND": "What exact condition should I check, and what should I do if it's true? (e.g. 'if wifi is off, turn it on')",
     "MAKE_FOLDER": "What should I name the folder?",
     "MAKE_FILE": "What should I name the file?",
+    "GROUP_FILES_BY_EXTENSION": "Which file types, and what should I name the new folder? (e.g. 'put the pdfs and json files in a folder named rezero')",
     "DELETE_ITEM": "Which file or folder should I delete? (just give me the name)",
     "READ_FILE": "Which file should I read?",
     "OPEN_ITEM": "Which file or folder should I open?",
@@ -1859,6 +2482,20 @@ MISSING_SLOT_QUESTIONS: Dict[str, str] = {
     "TYPE_INTO_ELEMENT": "What should I type, and into which field? (e.g. 'hello into the search box')",
     "STOP_SEEING": "What should I call this macro? (one word is easiest to trigger later)",
     "CONVERT_SELECTED_FILE": "What format should I convert it to? (e.g. text, pdf, json, jpg)",
+    "DOWNLOAD_VIDEO_URL": "What's the link to the video you want downloaded?",
+    "GENERATE_FILE": "What should I name it? (or say 'skip' and I'll pick a name)",
+}
+
+
+# Answers to GENERATE_FILE's "what should I name it?" question that mean
+# "I don't want to give one, just pick something" -- checked in
+# orchestrator.py's _resume_pending() BEFORE _strip_answer_filler/
+# generator.extract_explicit_name() get anywhere near the raw answer, so
+# "skip" itself never gets mistaken for a literal requested filename.
+GENERATE_FILE_SKIP_NAME_ANSWERS = {
+    "skip", "no", "nope", "nah", "whatever", "any", "any name",
+    "you pick", "you choose", "doesn't matter", "does not matter",
+    "i don't care", "i dont care", "no name", "none", "nothing",
 }
 
 
@@ -1927,6 +2564,20 @@ def resolve_missing_slot(intent: str, original_text: str, answer: str, wcl_varia
         # answer (e.g. user just replies "text" or "pdf" to "what format?").
         fmt = _extract_target_format(f"to {answer}") or _KNOWN_FORMAT_WORDS.get(answer.lower())
         return {"target_format": fmt} if fmt else None
+
+    if intent == "DOWNLOAD_VIDEO_URL":
+        # The answer to "what's the link?" is usually the bare URL itself,
+        # with no surrounding sentence for _extract_url's regex to anchor
+        # on quite as reliably -- so also accept a bare domain/path with no
+        # scheme (e.g. "youtube.com/watch?v=...") and add one back, same
+        # forgiving-but-explicit posture now_playing.py's address-bar reader
+        # already applies to a scheme-less browser value.
+        url = _extract_url(answer)
+        if url:
+            return {"url": url}
+        if re.match(r"^[\w.-]+\.[a-z]{2,}(?:/\S*)?$", answer, re.IGNORECASE):
+            return {"url": "https://" + answer}
+        return None
 
     if intent == "SCHEDULE_COMMAND":
         # Original message had a time expression but nothing to schedule

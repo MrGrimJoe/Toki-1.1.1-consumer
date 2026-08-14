@@ -76,19 +76,20 @@ SYNONYM_MAP: Dict[str, str] = {
     # like "delete" itself already does; no new ambiguity introduced.
     "erase": "delete",
     "destroy": "delete",
-    "trash": "delete",
     "discard": "delete",
-    # "get rid of X" is a common real phrasing that carries no other
-    # delete-adjacent word -- confirmed live: "get rid of the file called
-    # X" scored 0.0 delete-vocabulary weight and lost to FIND_FILES on
-    # generic "file" overlap before this entry (see routing_test.py).
-    "rid": "delete",
+    # "trash" and "rid" removed (BETA 0.3.51 casual-phrasing expansion):
+    # both are now real TIER_A_PHRASINGS vocabulary directly ("trash
+    # this"/"get rid of this file" were added to DELETE_ITEM's own
+    # phrasing corpus), so the synonym entries became pure no-ops --
+    # caught by test_synonyms.py::test_every_key_is_currently_absent_
+    # from_tier_a_vocabulary, which exists specifically to catch this.
     # COPY_ITEM -- "copy" is also tied to GET_CLIPBOARD/SET_CLIPBOARD in
-    # TIER_A_PHRASINGS already, but "clone"/"replicate" are unambiguously
-    # file-duplication words, not clipboard words, so they don't add new
+    # TIER_A_PHRASINGS already, but "replicate" is an unambiguously
+    # file-duplication word, not a clipboard word, so it doesn't add new
     # confusion beyond what "copy" itself already carries.
-    "clone": "copy",
     "replicate": "copy",
+    # "clone" removed, same reason as "trash"/"rid" above -- "clone this
+    # file" is now real COPY_ITEM vocabulary.
     # MOVE_ITEM -- "move" is tied to nothing else in TIER_A_PHRASINGS.
     "transfer": "move",
     # RENAME_ITEM -- "rename" is tied to nothing else.
@@ -97,23 +98,27 @@ SYNONYM_MAP: Dict[str, str] = {
     # FIND_FILES_BY_CONTENT -- "find" is already shared across these four
     # in TIER_A_PHRASINGS; "locate" spreads the same way, no new spread.
     "locate": "find",
-    # FIND_FILES_BY_CONTENT specifically -- "which files mention X" /
-    # "files that mention X" is a common real phrasing with no other
-    # content-search word in it. First attempt mapped this to the
-    # generic "find" target shared by FIND_FILES/FIND_PROCESS/
-    # FIND_DUPLICATE_FILES/FIND_FILES_BY_CONTENT alike -- confirmed live
-    # that's too generic, it just shifted the misroute to whichever
-    # other FIND_* command happened to score highest (FIND_DUPLICATE_FILES),
-    # not the right one. "containing" is FIND_FILES_BY_CONTENT's own
-    # word and appears in no other command's phrasing corpus (checked
-    # tier_a_phrasings.py directly), so this maps to the specific
-    # command instead of the whole find-family.
-    "mention": "containing",
+    # FIND_FILES_BY_CONTENT specifically -- "files that mention X" is a
+    # common real phrasing with no other content-search word in it.
+    # First attempt mapped this to the generic "find" target shared by
+    # FIND_FILES/FIND_PROCESS/FIND_DUPLICATE_FILES/FIND_FILES_BY_CONTENT
+    # alike -- confirmed live that's too generic, it just shifted the
+    # misroute to whichever other FIND_* command happened to score
+    # highest (FIND_DUPLICATE_FILES), not the right one. "containing" is
+    # FIND_FILES_BY_CONTENT's own word and appears in no other command's
+    # phrasing corpus (checked tier_a_phrasings.py directly), so this
+    # maps to the specific command instead of the whole find-family.
+    # ("mention" singular removed -- now real vocabulary, see above.
+    # "mentions" plural is still genuinely absent, kept.)
     "mentions": "containing",
-    # DISK_USAGE -- "disk" is tied to nothing else.
-    "storage": "disk",
-    # TOGGLE_MUTE -- "mute" is tied to nothing else.
-    "silence": "mute",
+    # DISK_USAGE -- "disk" is tied to nothing else. ("storage" removed:
+    # "hows my storage looking" is now real DISK_USAGE vocabulary.)
+    # TOGGLE_MUTE -- "mute" is tied to nothing else. ("silence" removed:
+    # "silence it" is now real TOGGLE_MUTE vocabulary -- "silence the
+    # volume" is a confident direct classify() hit now, not a
+    # below-threshold synonym-assisted candidate; see
+    # test_synonyms.py::TestSynonymClosesRealOOVMisses for the updated
+    # expectation.)
     # LIST_INSTALLED_APPS -- "apps" is tied to nothing else.
     "software": "apps",
 }

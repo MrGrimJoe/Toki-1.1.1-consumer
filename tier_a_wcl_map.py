@@ -66,7 +66,7 @@ How each entry was derived:
      CURRENT_USER, HOSTNAME, LOCK_WORKSTATION, TOGGLE_MUTE, VOLUME_UP,
      VOLUME_DOWN, GET_TIME, GET_DATE, GET_WEATHER, GET_FORECAST,
      SEARCH_WEB, GET_LOCATION, SCHEDULE_COMMAND, CANCEL_SCHEDULED,
-     CONDITIONAL_COMMAND, CHAT, ASK_CONTEXT.
+     CONDITIONAL_COMMAND, CHAT, ASK_CONTEXT, SET_TIMER.
 
 Verified against the real graph DB in test_tier_a_wcl_map.py -- run that
 before trusting any future edit to this file.
@@ -109,8 +109,21 @@ TIER_A_TO_WCL_CMDLETS: Dict[str, FrozenSet[str]] = {
     "RESIZE_SELECTED_FILE": frozenset(),
     "COMPRESS_SELECTED_FILE": frozenset(),
     "EXTRACT_SELECTED_FILE": frozenset(),
+    "DOWNLOAD_PLAYING_VIDEO": frozenset(),
+    "DOWNLOAD_VIDEO_URL": frozenset(),
+    # BETA 0.3.44 checkpoint 4 -- kind="api" like the conversion_engine/
+    # video-download intents just above, not "powershell". ORGANIZE_FILES_
+    # BY_TOPIC's actual move happens via Python's own shutil.move() inside
+    # file_graph/organizer.py (not a PowerShell Move-Item template) so its
+    # scoring engine can decide per-file, per-candidate-folder confidence
+    # first; GROUP_FILES_BY_EXTENSION similarly moves via shutil.move()
+    # inside file_grouping.py. Neither shells out to a cmdlet, so an empty
+    # set is exactly right, not a placeholder.
+    "ORGANIZE_FILES_BY_TOPIC": frozenset(),
+    "GROUP_FILES_BY_EXTENSION": frozenset(),
     "SCHEDULE_COMMAND": frozenset(),
     "CANCEL_SCHEDULED": frozenset(),
+    "SET_TIMER": frozenset(),
     "CONDITIONAL_COMMAND": frozenset(),
     "CHAT": frozenset(),
     "ASK_CONTEXT": frozenset(),

@@ -1,74 +1,76 @@
-# TOKI
-
-**A Windows desktop assistant that actually runs your computer for you — instantly, offline by default, and without a wall of confirmation dialogs.**
+# TOKI v1.1.1
 
 Created by **MrMIB**.
 
-Ask it in plain English to make a folder, find your biggest files, check the weather, launch an app, click a button, kill a stuck process, or a hundred other things, and it just does it — no cloud, no account, no API key. Anything it isn't sure is safe, it asks about first instead of guessing.
+TOKI is a lightweight desktop assistant for Windows. It sits as a small
+mark at the top of your screen, listens for a hotkey or your voice, and
+runs the request instantly — no chat window, no waiting on a cloud
+service, no account.
 
 ## What TOKI can do
 
-- **Files & folders** — create, delete, rename, move, copy, open, list, and search; check disk usage; find your largest, newest, or oldest files; find duplicates; find files over a certain size; export a folder listing to a spreadsheet-ready CSV; copy/paste via the clipboard
-- **Apps** — launch anything by name, and click, double-click, right-click, or type into whatever's on screen, just by describing it ("click Save")
-- **System stuff** — check uptime, battery, network info, temperature sensors, printers, USB devices; mute/unmute and adjust volume; take a screenshot; lock your PC; empty the Recycle Bin; open Task Manager; see what's using your CPU; and over a thousand more built-in Windows commands for anything more specific
-- **Info on demand** — current weather and forecast, the time and date, your location, and web search — no separate browser tab needed
-- **File conversion** — convert, resize, compress, or extract files by just asking
-- **Generate files** — ask for a script, note, or document and TOKI writes it straight to disk for you
-- **Scheduling** — "remind me in 10 minutes to..." or "tell me when CPU usage drops below 20%"
-- **Chaining** — do several things in one message: "make a folder called Homework and then open it"
-- **Voice** — press Ctrl+K and just talk to it, fully offline
-- **Chat** — anything conversational that doesn't fit the above still gets a normal, natural reply
+- **Files & folders** — create, move, rename, delete, search, and open
+  files and folders by plain description ("open my resume," "make a
+  folder called Taxes on the Desktop").
+- **Convert & compress files** — images, documents, text, archives, and
+  audio/video, just by asking ("convert this to PDF," "shrink this
+  image," "zip these up").
+- **Download video** — grab a video from a link, or download whatever's
+  currently playing in your browser tab.
+- **Apps & windows** — launch, close, and switch between apps; click and
+  type into on-screen buttons and fields by name.
+- **System control** — volume, brightness, power actions, and dozens of
+  other one-off Windows commands.
+- **Info on demand** — weather, running processes, system stats, and more.
+- **Chained commands** — string several requests together in one go
+  ("close Chrome and then open Notepad").
+- **Scheduling & timers** — "shut down in 10 minutes," "remind me in 20
+  minutes to check the oven."
+- **Voice or text** — press the hotkey (Ctrl+K) and speak, or double-click
+  the mark to type instead.
+- **Macros** — record a sequence of actions once and replay it later.
+- **Plugins** — extend TOKI with your own drop-in plugins.
 
-## How to use it
+Most requests are matched instantly against TOKI's own built-in command
+set and run with zero delay. If a request doesn't match anything TOKI
+already knows how to do, it can optionally hand the request to a local
+AI model (see below) instead of just giving up.
 
-1. Install TOKI (via the installer, or see "Running it manually" below).
-2. Open it and just type — or press **Ctrl+K** and speak.
-3. Anything TOKI is confident is safe runs immediately. If something you ask for is more sensitive (like deleting something outside the ordinary), TOKI will ask you a quick, plain-text question first instead of just doing it or popping up a dialog box.
-4. A **Stop** button is always visible — click it any time to immediately cancel whatever TOKI is doing.
+## Ollama (optional AI fallback)
 
-TOKI only works inside a set of folders you (or the installer) choose — by default your Desktop, so it can never wander off and touch something it shouldn't.
+TOKI works completely fine on its own — the vast majority of requests
+never need any AI model at all. Ollama, running a small local model
+(phi4-mini recommended), is only used as a fallback for the rare request
+TOKI's built-in commands don't cover.
 
-## Ollama — completely optional
+- It's entirely optional. You can skip installing it and TOKI will run
+  normally.
+- It runs 100% locally on your machine — nothing you say or type is ever
+  sent to the cloud, by TOKI or by Ollama.
+- If a request actually needed the AI fallback and Ollama isn't
+  installed or isn't running, TOKI will tell you plainly instead of
+  silently doing nothing — something like *"I didn't get that — that
+  needed my AI fallback (Ollama), which isn't running or isn't reachable
+  right now."*
 
-TOKI can use a local AI model (via [Ollama](https://ollama.com/)) as a fallback for open-ended chat and anything its built-in command list doesn't directly cover. **This is entirely optional.** The vast majority of what TOKI does — files, apps, system commands, scheduling, and more — is handled instantly by TOKI's own built-in logic and never touches Ollama or any AI model at all.
+## Safety
 
-If you skip installing Ollama, or your setup can't run it, TOKI still works normally for everything above. The only thing you lose is free-form conversational chat and open-ended questions that don't map to a specific command — and if you ever do run into that case, TOKI will tell you plainly ("I didn't get that — that needed my AI fallback, which isn't running right now") instead of just going silent.
-
-If you do want the AI fallback, the installer can set up Ollama and a small model (Phi-4-mini) for you — or you can install it yourself:
-
-```
-ollama pull phi4-mini
-```
-
-## Privacy & safety
-
-- **No cloud calls, no accounts, no API keys.** The only network requests TOKI ever makes are to Ollama on your own machine (if installed) and a handful of free, keyless public services for weather, search, and time zone lookups.
-- **Sandboxed by design.** TOKI can only touch the folders you've allowed — nothing outside that boundary is reachable, no matter how it's asked.
-- **Nothing risky runs without asking.** Anything TOKI isn't confident is safe pauses and asks you first, in plain text — no modal popups to click through blindly.
-- **Deletions go to the Recycle Bin**, never a permanent delete.
-- **Stop is always available**, and immediately cancels whatever's running.
+TOKI only ever touches files inside a sandbox — by default your D: drive
+and Desktop, or whichever folders you chose during setup. It never
+touches System32, Program Files, or anything outside that sandbox.
+Anything TOKI isn't confident is safe gets a one-line confirmation
+question instead of running automatically, and there's always a visible
+Stop button to cancel whatever's in progress.
 
 ## Requirements
 
-- Windows
-- Python 3.11 or newer
-- [Ollama](https://ollama.com/) — optional, only needed for open-ended chat (see above)
+- Windows 10 or 11
+- Python 3.11+
+- (Optional) Ollama + a small local model, if you want the AI fallback
 
-## Running it manually
+## Getting started
 
-If you're not using the installer:
-
-```
-pip install -r requirements.txt
-python main.py
-```
-
-## APIs used
-
-- **Weather**: [Open-Meteo](https://open-meteo.com/) (free, no key required)
-- **Search**: Wikipedia, with DuckDuckGo as a backup
-- **Location**: IP-based lookup via ipinfo.io, fetched once and cached
-
-## License
-
-MIT — see `LICENSE`.
+Run the installer, choose which folders TOKI is allowed to work in, and
+decide whether you want the optional Ollama AI fallback installed. Once
+it's done, TOKI runs quietly in the background — press **Ctrl+K** any
+time to talk to it.

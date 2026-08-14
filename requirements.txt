@@ -7,6 +7,15 @@ requests>=2.31.0
 # else in this file.
 Pillow>=10.0.0
 
+# conversion_engine/backends/text_backend.py -- OPTIONAL. Only needed if
+# you actually convert to/from yaml or toml; every other text/document/
+# image/archive/media format works without either of these. Left
+# commented out (rather than required) since most usage never touches
+# these two formats -- text_backend.py raises a clear, specific message
+# naming exactly which of these to install if a conversion needs one.
+# pyyaml>=6.0
+# toml>=0.10.2
+
 # graph_router.py -- the primary command router (tried before any LLM
 # call). No longer optional: it's how MAKE_FOLDER-style intents AND all
 # 284 dispatchable windows_command_library commands get matched.
@@ -19,6 +28,18 @@ kuzu>=0.11.0
 # available", with no indication that it's just a missing pip install.
 pywinauto>=0.6.8; sys_platform == 'win32'
 comtypes>=1.2.0; sys_platform == 'win32'
+
+# app_control.py's OCR fallback (BETA 0.3.44) -- click()/type_text()/
+# start_dictation() try this AFTER a clean UI-Automation miss, before
+# asking the user, specifically to catch on-screen text with no exposed
+# UIA name at all (canvas-rendered/web-component surfaces, notably Chrome
+# and Copilot -- see resolve_target()'s OCR-fallback comment). Wraps
+# Windows.Media.Ocr, a WinRT API already built into every Windows 10/11
+# install -- no separate OCR engine binary or model download needed.
+# OPTIONAL: missing this just means that fallback silently doesn't fire
+# and resolve_target() falls straight through to asking the user, same
+# clean-degrade posture as websocket-client below.
+winsdk==1.0.0b10; sys_platform == 'win32'
 
 # tests/ -- pure-Python regression suite (no Windows/Ollama needed), see
 # tests/README.md. Not needed to RUN the app, only to run the test suite.
@@ -54,3 +75,24 @@ sounddevice>=0.4.6
 # printed console line -- easy to miss since TOKI has no visible console
 # window in normal use).
 pynput>=1.7.6
+
+# video_downloader/ -- DOWNLOAD_PLAYING_VIDEO / DOWNLOAD_VIDEO_URL (BETA
+# 0.3.43). yt-dlp is the actively-maintained, community-run fork of the
+# now-dormant youtube-dl -- same "prefer the real, currently-maintained
+# tool over rolling something bespoke" posture as pandoc for documents.
+# Actual downloading also needs the ffmpeg BINARY on PATH (audio-only
+# extraction, and merging separately-served video+audio streams) --
+# checked explicitly at call time with a clear message if missing, same
+# convention as document_backend.py's pandoc check; not pip-installable,
+# so it isn't listed here.
+yt-dlp>=2024.1.0
+
+# video_downloader/cdp_now_playing.py -- OPTIONAL. Only used to answer
+# "which open tab actually has a video playing right now" via Chrome
+# DevTools Protocol, an upgrade over the address-bar-only fallback in
+# now_playing.py for the (uncommon) case where the browser happens to be
+# running with --remote-debugging-port open. Not required to install:
+# missing this package just means DOWNLOAD_PLAYING_VIDEO falls straight
+# through to the address-bar strategy, same "optional dependency, clear
+# degrade" posture as text_backend.py's pyyaml/toml handling above.
+# websocket-client>=1.7.0

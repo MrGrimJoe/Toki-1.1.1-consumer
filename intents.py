@@ -101,6 +101,35 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "slots": ["path"],
         "reversible": True,
     },
+    "ORGANIZE_FILES_BY_TOPIC": {
+        # kind="api", not "powershell" -- unlike SORT_FOLDER_BY_TYPE just
+        # above (a fixed extension->category map, purely mechanical),
+        # this needs real per-file evidence scoring
+        # (file_graph/scoring.py) no PowerShell one-liner can express.
+        # Deliberately a DIFFERENT intent from SORT_FOLDER_BY_TYPE, not a
+        # variant of it -- see file_graph/organizer.py's own docstring:
+        # this only ever moves a file into a folder that ALREADY exists
+        # and ALREADY has related content (evidence-scored), it never
+        # sorts into fixed Images/Documents/Archives-style buckets.
+        "description": "Organize loose files into existing topic folders based on filename/content similarity to what's already there -- never invents a new folder",
+        "kind": "api", "api": "fileorganizer", "action": "organize",
+        "slots": ["path", "include_suggestions"],
+        "reversible": True,
+    },
+    "GROUP_FILES_BY_EXTENSION": {
+        # Distinct from ORGANIZE_FILES_BY_TOPIC just above even though
+        # both end with "loose files land in a folder": this one is a
+        # fully explicit instruction ("put the pdfs and json files in a
+        # folder named rezero") -- no scoring, no confidence, always
+        # executes exactly what was asked, and (unlike
+        # ORGANIZE_FILES_BY_TOPIC's hard rule against ever inventing a
+        # folder) DOES create the named destination folder if it doesn't
+        # exist yet, because the user explicitly named it themselves.
+        "description": "Move all files of specific type(s) from a folder into a new or existing folder with a given name",
+        "kind": "api", "api": "filegrouping", "action": "group",
+        "slots": ["path", "extensions", "dest_name"],
+        "reversible": True,
+    },
     "FIND_FILES": {
         "description": "Search for files by name within the sandbox",
         "kind": "powershell",
@@ -231,6 +260,21 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "slots": ["command_text", "delay_seconds"],
         "reversible": True,  # cancellable before it fires -- see scheduler.py
     },
+    # BETA 0.3.48: split out of SCHEDULE_COMMAND -- a bare "set a timer
+    # for 10 minutes" / "remind me in 20 minutes" has no real command to
+    # RUN when it fires, just something to tell the user. Routing it
+    # through SCHEDULE_COMMAND used to mean re-running the leftover text
+    # ("remind me") through the full command pipeline at fire time,
+    # which silently web-searched it (see extractor.py's
+    # looks_like_bare_timer() docstring for the full story). Same
+    # scheduler.py engine underneath, just a "notify" fire-action instead
+    # of "re-classify and dispatch."
+    "SET_TIMER": {
+        "description": "Set a plain timer/reminder with no command attached -- just notify when it's up",
+        "kind": "timer",
+        "slots": ["delay_seconds", "label"],
+        "reversible": True,  # cancellable before it fires -- see scheduler.py
+    },
     "CANCEL_SCHEDULED": {
         "description": "Cancel a previously scheduled command or watched condition",
         "kind": "cancel_scheduled",
@@ -281,6 +325,27 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "api": "fileconvert",
         "action": "extract_selected",
         "slots": [],
+        "reversible": False,
+    },
+
+    # ── Video download — video_downloader/ wraps yt-dlp. DOWNLOAD_PLAYING_VIDEO
+    #    resolves its URL from the focused browser's address bar at dispatch
+    #    time (see apis.py's VideoDownloadAPI / video_downloader/now_playing.py);
+    #    DOWNLOAD_VIDEO_URL takes an explicit link the user typed/pasted. ───────
+    "DOWNLOAD_PLAYING_VIDEO": {
+        "description": "Download the video currently playing/open in the focused browser tab",
+        "kind": "api",
+        "api": "videodownload",
+        "action": "download_playing",
+        "slots": ["audio_only"],
+        "reversible": False,
+    },
+    "DOWNLOAD_VIDEO_URL": {
+        "description": "Download a video from a link/URL the user gave",
+        "kind": "api",
+        "api": "videodownload",
+        "action": "download_url",
+        "slots": ["url", "audio_only"],
         "reversible": False,
     },
 

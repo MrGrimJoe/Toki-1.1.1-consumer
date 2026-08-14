@@ -44,12 +44,14 @@ per-turn latency, so uia's slower tree walk is not the bottleneck.
 """
 
 import difflib
+import os
 import re
 import threading
 import time
 from typing import Dict, Any, Optional, List, Tuple
 
 from target_memory import TargetMemory
+import foreground_tracker
 
 # pywinauto/comtypes are DELIBERATELY NOT imported at module level.
 #
@@ -333,6 +335,221 @@ def capture_identity_at_point(x: int, y: int) -> Optional[Dict[str, str]]:
         return None
 
 
+# UIA control_type strings that read as an actual text-entry control --
+# same vocabulary _CLICKABLE_TYPES already uses, narrowed down to the
+# subset that's specifically "somewhere text can go", not just "clickable".
+_TEXT_ENTRY_TYPES = {"Edit", "ComboBox"}
+
+
+def _get_focused_text_element() -> Optional[Tuple[int, int, str]]:
+    """
+    Finds whichever descendant of the active window currently HAS
+    keyboard focus (UIAWrapper.has_keyboard_focus() -- the real pywinauto/
+    UIA property, walked over the same win.descendants() enumeration
+    resolve_target() already uses) and returns (x, y, name) for it ONLY if
+    its control_type reads as an actual text box (_TEXT_ENTRY_TYPES).
+
+    This is the concrete version of the design discussion's "if you're on
+    a screen with no other widgets, it's a text editor, don't ask" case:
+    something IS already focused, and it's a place text can legitimately
+    go, so AppController.start_dictation() can use it directly with no
+    question asked. Returns None for every other case -- nothing focused,
+    focus is on a button/list/anything that isn't itself a text box, or
+    any error along the way -- and start_dictation() treats None as "ask
+    the user" (via the same click-to-teach-style flow click() already
+    uses on a miss), never as license to guess.
+
+    NOT VERIFIED AGAINST REAL WINDOWS in this session -- same caveat as
+    capture_identity_at_point()'s docstring above: has_keyboard_focus() is
+    pywinauto's documented mechanism for this, logically reviewed against
+    its real API, but this repo has no way to run it against a live UI
+    Automation tree. Fails safe either way: any exception here is treated
+    as "couldn't tell", never a false "yes, it's a text box".
+    """
+    if not _load_pywinauto():
+        return None
+    try:
+        win = _get_focused_window()
+        for elem in win.descendants():
+            try:
+                if not elem.has_keyboard_focus():
+                    continue
+            except Exception:
+                continue
+            # Found the focused element -- resolve it once, then stop
+            # regardless of outcome. Only one element can have keyboard
+            # focus at a time, so there's nothing left to check either way.
+            try:
+                ctrl_type = elem.element_info.control_type
+                if ctrl_type not in _TEXT_ENTRY_TYPES:
+                    return None
+                rect = elem.rectangle()
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                name = elem.element_info.name or "the focused field"
+                return (cx, cy, name)
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
+# ── OCR fallback (BETA 0.3.44) ──────────────────────────────────────────────
+#
+# Design-doc request: "an OCR before asking the user ... a fast one and
+# one that can be run on almost any machine". This exists specifically for
+# resolve_target()'s clean-miss case: UI Automation found no accessible
+# name close enough to target_description. That happens for real on
+# exactly the surfaces the design doc calls out by name -- Chrome and
+# Copilot -- where a lot of on-screen text is rendered into a <canvas> or
+# a web component with no exposed UIA name at all, even though the text
+# is plainly visible on screen. OCR reads what's actually painted,
+# independent of whether the app bothered to expose an accessible name.
+#
+# Windows.Media.Ocr (via the winsdk package) rather than Tesseract/
+# PaddleOCR/etc: it's a WinRT API already built into every Windows 10/11
+# install, so "one that can run on almost any machine" is satisfied by
+# construction -- zero extra system binary, zero model download, nothing
+# to bundle. winsdk is added to requirements.txt as an optional,
+# Windows-only, lazily-imported dependency -- same "missing it just means
+# a clean degrade, not a crash" posture as pywinauto above: if it's not
+# installed, _load_winsdk_ocr() returns None and resolve_target() falls
+# straight through to its existing "ask the user" behavior, unchanged.
+#
+# Split into two functions specifically so the part that's actually
+# testable (scoring OCR'd text against target_description, converting a
+# matched line's bounding box into screen coordinates) is separate from
+# the part that isn't (the real WinRT capture+recognize call) -- mirrors
+# resolve_target()'s own tests, which mock _Desktop/win.descendants()
+# rather than exercising real pywinauto.
+
+def _load_winsdk_ocr():
+    try:
+        from winsdk.windows.media.ocr import OcrEngine
+        from winsdk.windows.graphics.imaging import (
+            SoftwareBitmap, BitmapPixelFormat, BitmapAlphaMode,
+        )
+        from winsdk.windows.storage.streams import DataWriter
+        return OcrEngine, SoftwareBitmap, BitmapPixelFormat, BitmapAlphaMode, DataWriter
+    except ImportError:
+        return None
+
+
+def _ocr_lines_from_bitmap(bbox: Tuple[int, int, int, int]) -> List[Tuple[str, Tuple[int, int, int, int]]]:
+    """
+    The genuinely unverifiable half: grabs a screenshot of bbox
+    (screen-absolute (left, top, right, bottom)) and runs Windows.Media.
+    Ocr over it, returning [(text, (left, top, right, bottom)), ...] with
+    each rect in BITMAP-LOCAL coordinates (i.e. relative to bbox's own
+    top-left, NOT screen-absolute -- _ocr_find_text_on_screen() below adds
+    bbox's offset back on for the one line it actually picks, so this
+    layer doesn't need to know or care about the caller's coordinate
+    space at all).
+
+    NOT VERIFIED AGAINST REAL WINDOWS in this session -- same caveat as
+    capture_identity_at_point()/_get_focused_text_element() above: this
+    wraps winsdk's documented projection of Windows.Media.Ocr
+    (OcrEngine.try_create_from_user_profile_languages() +
+    recognize_async(SoftwareBitmap), with the bitmap itself built via
+    SoftwareBitmap + a WinRT IBuffer from DataWriter.detach_buffer()) --
+    logically reviewed against that documented API surface, but this repo
+    has no Windows box to actually run it on. Returns [] on ANY failure
+    at any point (missing package, no display, OCR engine unavailable,
+    recognition error) -- resolve_target() treats an empty list exactly
+    like "OCR didn't find anything", never as a crash or a wrong click.
+    """
+    winsdk_bits = _load_winsdk_ocr()
+    if winsdk_bits is None:
+        return []
+    OcrEngine, SoftwareBitmap, BitmapPixelFormat, BitmapAlphaMode, DataWriter = winsdk_bits
+
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        return []
+
+    try:
+        img = ImageGrab.grab(bbox=bbox).convert("RGBA")
+    except Exception:
+        return []
+
+    try:
+        width, height = img.size
+        writer = DataWriter()
+        writer.write_bytes(list(img.tobytes()))
+        buf = writer.detach_buffer()
+
+        bitmap = SoftwareBitmap(BitmapPixelFormat.RGBA8, width, height, BitmapAlphaMode.STRAIGHT)
+        bitmap.copy_from_buffer(buf)
+
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if engine is None:
+            return []
+
+        import asyncio
+        result = asyncio.run(engine.recognize_async(bitmap))
+    except Exception:
+        return []
+
+    lines: List[Tuple[str, Tuple[int, int, int, int]]] = []
+    try:
+        for line in result.lines:
+            text = (line.text or "").strip()
+            words = list(line.words)
+            if not text or not words:
+                continue
+            lefts   = [w.bounding_rect.x for w in words]
+            tops    = [w.bounding_rect.y for w in words]
+            rights  = [w.bounding_rect.x + w.bounding_rect.width for w in words]
+            bottoms = [w.bounding_rect.y + w.bounding_rect.height for w in words]
+            lines.append((text, (min(lefts), min(tops), max(rights), max(bottoms))))
+    except Exception:
+        return []
+
+    return lines
+
+
+def _ocr_find_text_on_screen(target_description: str, window) -> Optional[Tuple[int, int, str]]:
+    """
+    The testable half: takes window (anything with a .rectangle(), same
+    contract resolve_target() already relies on), grabs its bounding box,
+    hands that to _ocr_lines_from_bitmap(), then scores every OCR'd line
+    against target_description with the exact same _score()/
+    _MATCH_THRESHOLD resolve_target() itself uses for UIA element names --
+    same fuzzy-match vocabulary, same confidence bar, just a different
+    source of candidate text. Returns None on no confident match, same
+    fail-safe contract as resolve_target()'s own clean-miss path.
+    """
+    try:
+        rect = window.rectangle()
+        bbox = (rect.left, rect.top, rect.right, rect.bottom)
+    except Exception:
+        return None
+
+    lines = _ocr_lines_from_bitmap(bbox)
+    if not lines:
+        return None
+
+    best_score = 0.0
+    best_text = ""
+    best_rect = None
+    for text, line_rect in lines:
+        score = _score(text, target_description)
+        if score > best_score:
+            best_score = score
+            best_text = text
+            best_rect = line_rect
+
+    if best_rect is None or best_score < _MATCH_THRESHOLD:
+        return None
+
+    l, t, r, b = best_rect
+    cx = bbox[0] + (l + r) // 2
+    cy = bbox[1] + (t + b) // 2
+    return (cx, cy, best_text)
+
+
 def wait_for_single_click(timeout_seconds: float = 15.0) -> Optional[Tuple[int, int]]:
     """
     Blocks the CALLING thread (never the Qt main thread -- see below) until
@@ -398,6 +615,30 @@ def escape_for_send_keys(text: str) -> str:
 
 
 def _get_focused_window():
+    """
+    Returns the pywinauto window object for whatever should be treated as
+    "the window the user means" right now.
+
+    ── foreground_tracker fallback (fixes the video-download / app-control
+    focus bug) ──
+    The live active window (desktop.window(active_only=True), a thin
+    wrapper over GetForegroundWindow()) is correct in general, but by the
+    time ANY app_control.py/now_playing.py code actually runs, OS focus
+    has almost always already moved to TOKI's own window -- the user just
+    typed/spoke a command into it. Naively trusting the live active
+    window here meant every video-download or click/type call resolved
+    against TOKI itself, never the browser or app the user actually
+    meant, regardless of what was genuinely focused a second earlier when
+    the command was issued.
+
+    Fix: if the live active window belongs to THIS process (own PID --
+    see foreground_tracker.py's docstring for why PID, not title/class),
+    fall back to foreground_tracker's remembered last non-TOKI window
+    instead of returning TOKI's own window as if it were the real
+    target. Only falls back on that specific "it's us" case -- if the
+    live active window genuinely is some other app, it's used directly,
+    unchanged from before this fix.
+    """
     if not _load_pywinauto():
         raise TargetNotFound("pywinauto isn't available on this system.")
     _ensure_com_initialized()
@@ -405,12 +646,48 @@ def _get_focused_window():
     try:
         win = desktop.window(active_only=True)
         win.wait("exists", timeout=3)
-        return win
     except Exception as e:
         # Keep the real exception type + message, not just str(e) -- e.g.
         # "OSError: [WinError -2147417850] ..." tells you far more than a
         # bare message would once this surfaces in the UI.
         raise TargetNotFound(f"Couldn't find a focused window: {type(e).__name__}: {e}")
+
+    try:
+        owner_pid = win.process_id()
+    except Exception:
+        # Can't tell whose window it is -- fail open to the live active
+        # window exactly like before this fix, rather than guessing.
+        return win
+
+    if owner_pid != os.getpid():
+        # Genuinely a different app -- this is the normal, common case
+        # and nothing about this fix changes it.
+        return win
+
+    # The live active window is TOKI's own -- fall back to the last real
+    # foreground window foreground_tracker observed.
+    fallback_hwnd = foreground_tracker.get_last_foreground_window()
+    if fallback_hwnd is None:
+        # No usable fallback recorded (tracker never started, nothing
+        # non-TOKI has had focus yet this session, or the remembered
+        # window has since closed) -- fail open to TOKI's own window
+        # rather than raising, same as this function's behavior before
+        # foreground_tracker existed. Callers already treat "resolved to
+        # TOKI's own window" as a clean miss (resolve_target() finds no
+        # matching element and reports the existing generic message),
+        # not a crash.
+        return win
+
+    try:
+        fallback_win = desktop.window(handle=fallback_hwnd)
+        fallback_win.wait("exists", timeout=3)
+        return fallback_win
+    except Exception:
+        # Recorded handle turned out to be stale after all (closed in the
+        # gap between foreground_tracker's IsWindow() check and this
+        # wait() call) -- fail open to TOKI's own window rather than
+        # raising, same reasoning as the "no fallback recorded" case above.
+        return win
 
 
 # Module-level singleton, same "cheap object, shared instance" pattern as
@@ -484,6 +761,16 @@ def resolve_target(target_description: str) -> Tuple[Optional[Tuple[int, int, st
         learned = _try_resolve_from_memory(target_description, candidates)
         if learned is not None:
             return learned, None
+        # OCR pre-check, before giving up entirely (see _ocr_find_text_on_
+        # screen()'s docstring above): catches exactly the Chrome/Copilot
+        # case the design discussion called out -- on-screen text with no
+        # accessible UIA name at all. Checked AFTER both the fuzzy pass
+        # and memory recall, same reasoning as memory's own placement:
+        # never changes behavior for anything that already worked via UIA,
+        # only recovers cases that would otherwise be a clean miss.
+        ocr_match = _ocr_find_text_on_screen(target_description, win)
+        if ocr_match is not None:
+            return ocr_match, None
         return None, None  # clean walk, genuinely no good match -- not an error
 
     try:
@@ -624,6 +911,17 @@ class AppController:
     def invalidate_app_cache(self):
         AppController._app_list_cache = None
         AppController._last_fetch_failure_time = None
+
+    def prime_app_cache(self) -> None:
+        """Populate _app_list_cache now instead of waiting for the first
+        real app-control call. Safe to call from a background thread at
+        startup (see orchestrator.py's WindowsAIAssistant.__init__) --
+        _get_installed_apps() already fails soft and never raises, so
+        there's nothing for a caller here to catch. A cache hit later
+        just returns instantly instead of paying the Get-StartApps
+        subprocess cost on the user's first LAUNCH_APP/KILL_PROCESS/etc.
+        turn."""
+        self._get_installed_apps()
 
     def _find_installed_app(self, name: str) -> Optional[Dict[str, str]]:
         """
@@ -859,3 +1157,99 @@ class AppController:
     def run_macro(self, macro_name: str) -> str:
         from macro_recorder import MacroPlayer
         return MacroPlayer().play(macro_name)
+
+    # ── "start listening" continuous dictation ─────────────────────────────
+    # See voice_pipeline.py's DictationPipeline docstring for the capture
+    # side. This half owns target resolution + the actual typing, same
+    # "state lives on the instance, persists turn-to-turn" pattern as
+    # _active_recorder above -- start_dictation() runs on the turn that
+    # says "start listening", stop_dictation() runs later from the widget's
+    # stop button (main_widget.py), and both need to see the same session.
+    _active_dictation = None  # DictationPipeline instance, or None
+
+    def start_dictation(self, target_description: str = "") -> str:
+        """
+        Target resolution, per the design discussion (see STATUS.md for
+        the full reasoning): a given target_description resolves exactly
+        like click()/type_text() do. With nothing given, checks whatever
+        currently has keyboard focus -- if it's already a real text-entry
+        control (see _get_focused_text_element()'s docstring for exactly
+        what that means), that's the target and nothing is asked; if focus
+        is on something else entirely (or nothing identifiable), this
+        falls back to the SAME "click it for me" flow click() already
+        offers on a resolve_target() miss (see teach_from_next_click()) --
+        asking a fixed question by blocking for one click, never guessing
+        which field was meant.
+        """
+        if not _load_pywinauto():
+            return "Cursor control isn't available on this system (pywinauto/UI Automation required)."
+        if self._active_dictation is not None:
+            return "Already listening -- tap the stop button on the widget first."
+
+        matched_name = "the focused field"
+        if target_description:
+            match, reason = resolve_target(target_description)
+            if match is None:
+                if reason:
+                    return f"Couldn't look for \"{target_description}\": {reason}"
+                return f"Couldn't confidently find \"{target_description}\" to type into -- not starting."
+            x, y, matched_name = match
+        else:
+            focused = _get_focused_text_element()
+            if focused is not None:
+                x, y, matched_name = focused
+            else:
+                point = wait_for_single_click(15.0)
+                if point is None:
+                    return "Didn't see a click within 15s -- never mind, dictation wasn't started."
+                x, y = point
+                identity = capture_identity_at_point(x, y)
+                if identity and identity.get("name"):
+                    matched_name = identity["name"]
+
+        try:
+            from pywinauto.mouse import click as mouse_click
+            mouse_click(button="left", coords=(x, y))  # focus it once, up front
+        except Exception as e:
+            return f"Found \"{matched_name}\" but couldn't focus it: {e}"
+
+        from voice_pipeline import DictationPipeline
+        pipeline = DictationPipeline()
+
+        def _type_utterance(text: str) -> None:
+            # No re-click here on purpose -- see start_dictation()'s own
+            # docstring / STATUS.md: clicking again before every single
+            # utterance risks moving the caret if the user (or the app
+            # itself) scrolled/selected something in between, which a
+            # one-time focus click at session start does not risk.
+            try:
+                from pywinauto.keyboard import send_keys
+                send_keys(escape_for_send_keys(text) + " ")
+            except Exception as e:
+                print(f"[TOKI-Dictation] Typing failed: {e}")
+
+        pipeline.utterance_transcribed.connect(_type_utterance)
+        pipeline.unavailable.connect(lambda reason: print(f"[TOKI-Dictation] {reason}"))
+        self._active_dictation = pipeline
+        pipeline.start()
+        return f"Listening -- say something and I'll type it into \"{matched_name}\". Tap the stop button when you're done."
+
+    def stop_dictation(self) -> str:
+        if self._active_dictation is None:
+            return "Nothing's being dictated right now."
+        # Cleared HERE, synchronously, rather than via the pipeline's own
+        # dictation_stopped signal -- that signal only fires once the
+        # background QThread actually finishes closing its audio stream
+        # (up to ~0.3s of polling latency later), but "the user asked to
+        # stop" is true the moment this method is called, from EITHER
+        # caller (the widget's stop button, or a plain "stop listening"
+        # voice/typed command routed through the same orchestrator
+        # dispatch as everything else). main_widget.py checks
+        # _active_dictation right after every turn to show/hide the
+        # dictation panel -- if this waited for the async signal instead,
+        # a "stop listening" voice command would return its own success
+        # message while _active_dictation was still momentarily non-None,
+        # and the panel would wrongly stay visible for that same window.
+        self._active_dictation.stop()
+        self._active_dictation = None
+        return "Stopped listening."

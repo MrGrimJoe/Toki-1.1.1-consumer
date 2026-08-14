@@ -2,18 +2,18 @@
 apis.py — the non-PowerShell tools: weather, search, time, location.
 
 - Weather: Open-Meteo (no API key required).
-- Search: DuckDuckGo Instant Answer API (no API key required).
+- Search: NOT an API. See WebSearchAPI's docstring -- builds a real
+  search-engine URL and opens it in Chrome, no search API/scraping.
 - Time/date: pure Python, zero network calls.
 - Location: IP-based geolocation, fetched once and cached for the process
   lifetime so the user is never asked and it's never re-fetched every turn.
 """
 
-import re
 import requests
 import time
 from datetime import datetime
 from typing import Dict, Optional
-from urllib.parse import quote
+from urllib.parse import quote_plus
 
 
 # Every API-layer function below that can fail returns a short,
@@ -30,6 +30,8 @@ FAILURE_PREFIXES = (
     "Couldn't find", "Couldn't determine", "Weather lookup failed",
     "Forecast lookup failed", "Search failed", "Nothing is selected",
     "Couldn't convert", "Couldn't resize", "Couldn't compress", "Couldn't extract",
+    "Couldn't detect", "Couldn't download", "Couldn't organize", "Can't organize",
+    "Couldn't group", "Can't do that",
 )
 
 
@@ -48,87 +50,6 @@ def _friendly_request_error(e: Exception, action: str, service: str = "the servi
     if isinstance(e, requests.exceptions.HTTPError):
         return f"{action} failed: {service} returned an error."
     return f"{action} failed: something went wrong on this end."
-
-
-# ─── Targeted sub-question matching for WebSearchAPI ──────────────────────
-#
-# The Wikipedia summary REST endpoint only ever gives you a page's LEAD
-# PARAGRAPH -- fine for "tell me about Pakistan", useless for "who founded
-# Pakistan" (the lead paragraph is generally geography/population/
-# government, not founding history). This scans a bigger, real extract of
-# the article for the sentence that actually answers the specific question,
-# using plain keyword overlap -- no model call, no scraping, same
-# never-guess philosophy as every regex extractor in extractor.py.
-
-_QUESTION_STOPWORDS = {
-    "who", "what", "when", "where", "why", "how", "is", "was", "are", "were",
-    "did", "does", "do", "the", "a", "an", "of", "in", "on", "for", "to",
-    "please", "me", "you", "tell", "about", "search", "look", "up", "google",
-    "and", "or", "its", "it's", "this", "that",
-}
-
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-_WORD_RE = re.compile(r"[A-Za-z']+")
-
-
-def _question_keywords(query: str) -> list:
-    words = _WORD_RE.findall(query.lower())
-    return [w for w in words if w not in _QUESTION_STOPWORDS and len(w) > 2]
-
-
-# Longest/most-specific suffixes first so e.g. "founders" strips to "found"
-# in one pass instead of stopping early at "founder" -> "found" via "er"
-# only. Each strip requires >=3 chars left over so short words like "is"
-# or "as" are never mangled down to nothing.
-_STEM_SUFFIXES = ("ing", "ers", "eds", "er", "ed", "'s", "s")
-
-
-def _stem(word: str) -> str:
-    """
-    Lightweight suffix-stripping -- NOT a real stemmer (no Porter
-    algorithm, no external deps) -- just enough to fix single-word
-    keyword matches breaking on ordinary noun/verb inflection. e.g. the
-    query keyword "founder" and the article word "founded" share no
-    substring relationship at all ("founder" vs "founded"), so plain
-    substring/equality matching finds nothing and silently falls back to
-    the generic lead paragraph. Stemming both down to "found" fixes that
-    whole word family (founder/founded/founding/founders).
-    """
-    for suf in _STEM_SUFFIXES:
-        if word.endswith(suf) and len(word) - len(suf) >= 3:
-            return word[: -len(suf)]
-    return word
-
-
-def _best_matching_sentence(query: str, full_text: str, title: str = "") -> Optional[str]:
-    """
-    Returns the sentence in full_text that best matches the query's
-    DISTINGUISHING keywords (the topic name itself is deliberately
-    excluded -- it appears in nearly every sentence of its own article, so
-    scoring on it would just match ~anything). Returns None if nothing
-    distinguishing is left in the query (e.g. a generic "tell me about X"
-    with no real sub-question), so the caller falls back to the plain lead
-    summary as before.
-
-    Matching is done on STEMMED whole words (not raw substrings) so a
-    query keyword like "founder" matches article text like "founded" --
-    see _stem()'s docstring. Whole-word comparison also avoids the
-    opposite failure mode plain substring matching had: a short keyword
-    like "art" spuriously matching inside "started" or "particle".
-    """
-    title_words = set(_WORD_RE.findall(title.lower()))
-    keywords = [w for w in _question_keywords(query) if w not in title_words]
-    if not keywords:
-        return None
-    stemmed_keywords = {_stem(kw) for kw in keywords}
-
-    best_sentence, best_score = None, 0
-    for sentence in _SENTENCE_SPLIT_RE.split(full_text):
-        sentence_words = {_stem(w) for w in _WORD_RE.findall(sentence.lower())}
-        score = sum(1 for kw in stemmed_keywords if kw in sentence_words)
-        if score > best_score:
-            best_sentence, best_score = sentence, score
-    return best_sentence.strip() if best_sentence and best_score >= 1 else None
 
 
 class LocationCache:
@@ -263,182 +184,120 @@ class WeatherAPI:
 
 class WebSearchAPI:
     """
-    Real lookups from two legitimate, keyless, unthrottled-for-our-purposes
-    APIs -- no HTML scraping anywhere in this class.
+    BETA 0.3.44 architecture pivot -- search is NOT an API call anymore.
 
-    NOTE (why this replaced the old implementation, and why it's NOT a
-    scraper either): the original version hit DuckDuckGo's Instant Answer
-    API (api.duckduckgo.com/?format=json), which is NOT a search engine --
-    it's the knowledge-graph box above DuckDuckGo's real results, and it
-    only returns anything for topics with a Wikipedia-style abstract. For
-    ordinary conversational queries it silently returns nothing, which is
-    why it kept reporting "No results found." even when the answer clearly
-    existed on the web.
+    WHY THIS REPLACED THE WIKIPEDIA/DUCKDUCKGO IMPLEMENTATION: that version
+    answered "what is X" from a knowledge-graph API, and only for topics
+    with a Wikipedia-style abstract -- it was never a real web search, and
+    for ordinary conversational queries it just returned nothing. It also
+    baked in a permanent ceiling: TOKI's search was always going to be as
+    good as Wikipedia's summary API, never as good as an actual search
+    engine, no matter how much more work went into it.
 
-    The tempting next step is to scrape DuckDuckGo's HTML results page
-    (html.duckduckgo.com/html/) instead -- DON'T. That page actively
-    fingerprints and 403s automated requests regardless of User-Agent, by
-    design, and it can start blocking mid-session with zero warning. That
-    is an unacceptable failure mode for a live Saturday demo: it might work
-    in testing and then silently break in front of an audience.
+    The decision (finalized, not a workaround): TOKI has no native web
+    search capability at all, and isn't meant to. The pipeline is
 
-    Instead, this class uses TWO real, sanctioned, keyless APIs:
-      1. Wikipedia's REST API (search + summary) -- the primary path. It's
-         a genuine, documented, heavily-cached public API (not a scrape),
-         rate-limited generously (~200 req/s/client with a contactable
-         User-Agent) and it answers the overwhelming majority of factual
-         "what is X" / "who is X" / "tell me about X" queries a demo judge
-         is likely to try.
-      2. DuckDuckGo's Instant Answer API, KEPT (not removed) as a secondary
-         source for the cases Wikipedia doesn't have a page for -- it's
-         legitimate and unblocked, just narrow, so it earns a try but never
-         a scrape to widen it.
+        query -> build a real search-engine URL -> open it in Chrome
 
-    If neither has anything, we say so honestly instead of returning
-    scraped or fabricated content.
+    Chrome IS the search capability -- "Toki's infinite web extension".
+    No search API, no HTML scraping, no fake AI search layer sitting in
+    between the user and real results. This also means search literally
+    cannot go stale or get rate-limited: it's exactly as good as Google
+    (or YouTube/GitHub for the specialized cases below) always is.
+
+    SEARCH_URLS covers the specialized, native-search-URL cases named in
+    the design doc (YouTube/GitHub/Maps use their own real search UIs, not
+    a generic web search of them) -- wired up here so a future intent
+    (SEARCH_YOUTUBE etc.) can pass site= without touching this class again.
+    Deliberately NOT auto-detected from the query text in this checkpoint:
+    guessing "youtube" out of arbitrary free text risks exactly the kind of
+    invented structure this codebase's slot-extraction already avoids
+    everywhere else (see orchestrator.py's chain-split docstring) -- e.g.
+    "search for youtube alternatives" would wrongly get routed to YouTube's
+    search box instead of Google's. site defaults to "web" until a real,
+    unambiguous slot (a separate intent, not text-sniffing) supplies it.
     """
 
-    WIKI_SEARCH_URL = "https://en.wikipedia.org/w/rest.php/v1/search/page"
-    WIKI_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
-    WIKI_ACTION_URL = "https://en.wikipedia.org/w/api.php"
-    DDG_URL = "https://api.duckduckgo.com/"
+    SEARCH_URLS = {
+        "web": "https://www.google.com/search?q={q}",
+        "youtube": "https://www.youtube.com/results?search_query={q}",
+        "github": "https://github.com/search?q={q}",
+        "maps": "https://www.google.com/maps/search/{q}/",
+    }
 
-    # Wikimedia's usage policy asks for a descriptive, contactable
-    # User-Agent -- a bare default UA is the single most common reason a
-    # keyless request to their API gets throttled, so this costs one header
-    # to avoid that entirely.
-    _HEADERS = {"User-Agent": "TOKI-DesktopAssistant/1.0 (school project; contact: n/a)"}
+    # Same bug class app_control.py's _escape_ps_slot() docstring covers
+    # (Assassin's Creed breaking Start-Process 'Assassin's Creed') -- needed
+    # again here, separately, because this builds its own PowerShell command
+    # string directly rather than going through orchestrator.py's
+    # centralized "powershell"-kind escaping (this is an "api"-kind intent,
+    # never routed through that path).
+    @staticmethod
+    def _escape_ps_slot(value: str) -> str:
+        return value.replace("'", "''")
 
-    def _wiki_search(self, query: str, num_results: int) -> list:
-        resp = requests.get(
-            self.WIKI_SEARCH_URL,
-            params={"q": query, "limit": num_results},
-            headers=self._HEADERS,
-            timeout=6,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        # Defensive: the documented shape is {"pages": [...]}, but parse
-        # defensively in case that top-level key ever shifts -- a bare list
-        # response should still work rather than silently returning nothing.
-        if isinstance(data, list):
-            return data
-        return data.get("pages", [])
-
-    def _wiki_summary(self, title: str) -> Optional[str]:
-        # Percent-encode the title before it goes into the URL PATH (not a
-        # query param, so requests' automatic params= encoding doesn't
-        # apply here -- this has to be done by hand). Without it, any real
-        # article title containing a URL-meaningful character breaks the
-        # request outright: "AC/DC" -> an extra path segment instead of
-        # the title ("/summary/AC/DC" is parsed as title "AC" + subpath
-        # "DC", not "AC/DC"); "Are You Experienced?" -> everything from
-        # "?" onward is parsed as a query string, truncating the actual
-        # title to "Are_You_Experienced". Both are real Wikipedia article
-        # titles, not edge cases -- confirmed by constructing the exact
-        # URL each one produces unescaped and checking it against how a
-        # URL parser splits path/query/fragment. quote(..., safe="")
-        # escapes '/' too (the default safe="/" would leave the "AC/DC"
-        # case broken), which is what's needed since '/' here is real
-        # title content, not a path separator we want to keep.
-        safe_title = quote(title.replace(" ", "_"), safe="")
-        resp = requests.get(
-            self.WIKI_SUMMARY_URL.format(title=safe_title),
-            headers=self._HEADERS,
-            timeout=6,
-        )
-        if resp.status_code != 200:
-            return None
-        extract = resp.json().get("extract")
-        return extract.strip() if extract else None
-
-    def _wiki_full_extract(self, title: str, max_chars: int = 2000) -> Optional[str]:
+    def _open_in_chrome(self, url: str) -> None:
         """
-        A bigger, real plain-text extract of the article -- still
-        Wikipedia's own documented Action API (action=query&prop=extracts),
-        NOT a scrape, just not limited to the lead paragraph the way
-        _wiki_summary()'s REST endpoint is. Used only to hunt for a
-        sentence that answers a SPECIFIC sub-question (e.g. "who founded
-        X", "when was X invented") -- _wiki_summary()'s lead paragraph
-        stays the default for generic "tell me about X" queries.
+        Launches Chrome specifically (not just "the default browser") with
+        url as its argument, checking the three real install locations
+        directly rather than trusting chrome.exe to be on PATH -- it isn't,
+        by default, on a normal Chrome install. Fails open: if Chrome truly
+        isn't installed, hands the URL to Start-Process bare, which opens
+        whatever the user's actual default browser is, same fail-open
+        posture as AppController.launch_app().
         """
-        try:
-            resp = requests.get(
-                self.WIKI_ACTION_URL,
-                params={
-                    "action": "query", "prop": "extracts", "explaintext": 1,
-                    "exchars": max_chars, "titles": title, "format": "json",
-                    "redirects": 1,
-                },
-                headers=self._HEADERS,
-                timeout=6,
-            )
-            resp.raise_for_status()
-            pages = resp.json().get("query", {}).get("pages", {})
-            for page in pages.values():
-                extract = page.get("extract")
-                if extract:
-                    return extract.strip()
-        except Exception:
-            pass
-        return None
+        import subprocess
 
-    def _ddg_abstract(self, query: str) -> Optional[str]:
-        resp = requests.get(self.DDG_URL, params={
-            "q": query, "format": "json", "no_html": 1, "skip_disambig": 1,
-        }, headers=self._HEADERS, timeout=6)
-        resp.raise_for_status()
-        abstract = resp.json().get("AbstractText")
-        return abstract.strip() if abstract else None
+        safe_url = self._escape_ps_slot(url)
+        ps_cmd = (
+            "$p = @("
+            "\"$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe\", "
+            "\"${env:ProgramFiles(x86)}\\Google\\Chrome\\Application\\chrome.exe\", "
+            "\"$env:LocalAppData\\Google\\Chrome\\Application\\chrome.exe\""
+            ") | Where-Object { Test-Path $_ } | Select-Object -First 1; "
+            f"if ($p) {{ Start-Process -FilePath $p -ArgumentList '{safe_url}' }} "
+            f"else {{ Start-Process '{safe_url}' }}"
+        )
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
 
-    def search(self, query: str, num_results: int = 3) -> str:
+    def search(self, query: str, site: str = "web", num_results: int = 3) -> str:
+        # num_results kept as an accepted-but-unused param: orchestrator.py's
+        # ToolDispatcher.call() only drops a slot on TypeError, and nothing
+        # about removing it here is worth risking that path for.
         if not query:
             return "No search query given."
 
-        # 1. Wikipedia: find matching pages, then pull a real summary for
-        #    the best match. Two calls, but each is a genuine documented
-        #    endpoint, not a scrape, and both are fast/cached.
+        site_key = (site or "web").lower().strip()
+        template = self.SEARCH_URLS.get(site_key, self.SEARCH_URLS["web"])
+        url = template.format(q=quote_plus(query))
+
+        # BETA 0.3.56: YouTube results open through a dedicated,
+        # CDP-debug-enabled browser instance instead of the plain
+        # _open_in_chrome() path below -- see
+        # video_downloader/media_browser.py's module docstring for the
+        # full reasoning. This is what makes DOWNLOAD_PLAYING_VIDEO's
+        # CDP fast path (cdp_now_playing.py) actually fire for videos
+        # TOKI itself opened, instead of silently never having a debug
+        # port to talk to. Never touches the user's real/main browser;
+        # any failure here (browser not found, launch error) falls
+        # straight through to the exact same plain-Chrome path every
+        # other search already uses.
+        if site_key == "youtube":
+            try:
+                from video_downloader.media_browser import launch_media_browser
+                if launch_media_browser(url):
+                    return f"Searching YouTube for '{query}' in TOKI's media browser."
+            except Exception:
+                pass  # fall through to the plain path below
+
         try:
-            pages = self._wiki_search(query, num_results)
-        except Exception:
-            pages = []
+            self._open_in_chrome(url)
+        except Exception as e:
+            return f"Search failed: couldn't open Chrome ({e})."
 
-        if pages:
-            top = pages[0]
-            title = top.get("title", "")
-
-            # Try to answer a SPECIFIC sub-question first (e.g. "who
-            # founded X", "when was X invented") by scanning a bigger real
-            # extract for the sentence matching the question's
-            # distinguishing keyword(s) -- deliberately NOT the topic name
-            # itself, which appears in nearly every sentence and would
-            # match everything. Returns None (falls through to the plain
-            # lead summary below) for generic "tell me about X" queries
-            # with nothing distinguishing left to search for.
-            full_text = self._wiki_full_extract(title)
-            if full_text:
-                targeted = _best_matching_sentence(query, full_text, title)
-                if targeted:
-                    return f"{title}: {targeted}"
-
-            summary = self._wiki_summary(title)
-            if summary:
-                others = [p["title"] for p in pages[1:num_results] if p.get("title")]
-                result = f"{title}: {summary[:500]}"
-                if others:
-                    result += f"\n(Related: {', '.join(others)})"
-                return result
-
-        # 2. DuckDuckGo Instant Answer as a secondary source -- still a
-        #    real API call, just narrower in what it covers.
-        try:
-            abstract = self._ddg_abstract(query)
-            if abstract:
-                return abstract[:500]
-        except Exception:
-            pass
-
-        return f"Couldn't find a direct answer for '{query}'."
+        return f"Searching for '{query}' in Chrome."
 
 
 class TimeAPI:
@@ -540,3 +399,107 @@ class FileConvertAPI:
             return f"Extracted to {out}"
         except Exception as e:
             return f"Couldn't extract that file: {e}"
+
+
+class VideoDownloadAPI:
+    """
+    Thin adapter between orchestrator.py's api-kind dispatch and
+    video_downloader/ -- same shape as FileConvertAPI just above: plain
+    string slots in, one short human-readable sentence out, never a raw
+    path or traceback.
+
+    download_playing() resolves ITS OWN url at call time via
+    video_downloader.now_playing.get_now_playing_url() -- which itself
+    tries video_downloader/cdp_now_playing.py first (which open tab
+    actually has a video playing right now, via Chrome DevTools
+    Protocol) and falls back to the focused browser's address bar if
+    CDP isn't reachable -- rather than trusting anything
+    extract_slots() pulled from the user's phrasing -- there's nothing
+    for the user to have said that WOULD contain that URL, unlike
+    download_url(), which always comes from an explicit link the user
+    typed or pasted.
+    """
+
+    def download_playing(self, audio_only: str = "") -> str:
+        from video_downloader.now_playing import get_now_playing_url
+        url = get_now_playing_url()
+        if not url:
+            return (
+                "Couldn't detect what's playing -- make sure the video's "
+                "browser tab is the focused window, or just paste me the link."
+            )
+        return self._download(url, audio_only)
+
+    def download_url(self, url: str = "", audio_only: str = "") -> str:
+        if not url:
+            return "Couldn't find a link in that -- send me the video's URL."
+        return self._download(url, audio_only)
+
+    def _download(self, url: str, audio_only: str) -> str:
+        try:
+            from video_downloader import download_video
+            out = download_video(url, audio_only=bool(audio_only))
+            return f"Downloaded to {out}"
+        except Exception as e:
+            return f"Couldn't download that video: {e}"
+
+
+class FileOrganizerAPI:
+    """
+    Thin adapter between orchestrator.py's api-kind dispatch and
+    file_graph/ -- same shape as FileConvertAPI/VideoDownloadAPI above:
+    plain string slots in, one human-readable sentence out, never a raw
+    traceback. See file_graph/organizer.py's own (much longer) docstring
+    for the actual scan/score/execute pipeline and its safety guarantees
+    (never invents a destination folder, sandbox-checked twice, never
+    overwrites an existing file).
+
+    `path` always arrives already resolved by extractor.py (defaults to
+    the real Desktop when the user didn't name a folder, same
+    `_default_root_for()` fallback SORT_FOLDER_BY_TYPE already uses) --
+    this class never has to guess a root itself.
+
+    `include_suggestions` arrives as the string "true" or "" (extractor.py's
+    usual string-slot convention -- see its own ORGANIZE_FILES_BY_TOPIC
+    branch for the exact trigger phrases), not a real bool, so it's
+    coerced here with a plain truthiness check.
+    """
+
+    def __init__(self):
+        from file_graph.organizer import FileOrganizer
+        self._organizer = FileOrganizer()
+
+    def organize(self, path: str = "", include_suggestions: str = "") -> str:
+        if not path:
+            return "Couldn't find a folder to organize -- which one did you mean?"
+        try:
+            return self._organizer.organize(path, include_suggestions=bool(include_suggestions))
+        except Exception as e:
+            return f"Couldn't organize {path}: {e}"
+
+
+class FileGroupingAPI:
+    """
+    Thin adapter for GROUP_FILES_BY_EXTENSION -- see file_grouping.py's
+    own docstring for why this is a separate, simpler module from
+    FileOrganizerAPI/file_graph/ above rather than a variant of it: no
+    scoring, no confidence, a fully explicit instruction executed as-is.
+
+    `extensions` arrives as a comma-joined string, not a real list --
+    same string-only-slot convention every api-kind action in this file
+    already follows (extract_slots() always returns Dict[str, str]), so
+    it's split back apart here.
+    """
+
+    def __init__(self):
+        from file_grouping import group_files_by_extension
+        self._group = group_files_by_extension
+
+    def group(self, path: str = "", extensions: str = "", dest_name: str = "") -> str:
+        if not path or not extensions or not dest_name:
+            return "Couldn't determine which file types or what to name the new folder -- can you spell that out?"
+        ext_list = [e.strip() for e in extensions.split(",") if e.strip()]
+        try:
+            return self._group(path, ext_list, dest_name)
+        except Exception as e:
+            return f"Couldn't group those files: {e}"

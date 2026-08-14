@@ -66,14 +66,18 @@ from PyQt6.QtCore import (
     Qt, QPoint, QRect, QTimer, QPropertyAnimation, QEasingCurve,
     pyqtSignal, QObject, pyqtSlot,
 )
-from PyQt6.QtGui import QColor, QAction, QIcon, QPixmap, QCursor
+from PyQt6.QtGui import QColor, QAction, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSystemTrayIcon, QMenu,
-    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit,
+    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QScrollArea,
 )
 
 from mark_renderer import MoodMarkWidget
+from ui_theme import (
+    ACCENT, RADIUS, RADIUS_SM, TEXT_PRIMARY, TEXT_MUTED, TEXT_FAINT,
+    OUTER_MARGINS, font_css, make_shadow, card_qss, button_qss, line_edit_qss,
+)
 
 # BETA 0.3.39: the mark used to render via QWebEngineView + mark_visual.py's
 # HTML/SVG/JS. Confirmed directly that QWebEngineView's Chromium compositor
@@ -123,9 +127,101 @@ class _Bridge(QObject):
                                  # to fire (confirmed directly: it silently
                                  # never ran in testing).
     permission_confirm = pyqtSignal()  # avatar-click permission gate confirm
+    dictation_active = pyqtSignal(bool)  # continuous dictation started/stopped
+                                 # (see AppController.start_dictation() /
+                                 # stop_dictation()) -- emitted from the same
+                                 # background dispatch thread as reply/done
+                                 # above, same cross-thread-safety reasoning.
+    dictation_stop_clicked = pyqtSignal()  # the stop panel's button, Qt-thread
+    result_ready = pyqtSignal(str, str)  # (strategy, text) -- see
+                                 # display_strategy.classify_display().
+                                 # Added alongside that module (BETA
+                                 # 0.3.51): `reply` above is left exactly
+                                 # as it was (still used by drag/drop
+                                 # feedback and the permission-gate
+                                 # confirm's old call site) -- this is a
+                                 # separate, additive signal so nothing
+                                 # that already depends on `reply`'s
+                                 # single-str-argument shape breaks.
+    global_click = pyqtSignal(int, int)  # (x, y) screen coords of a left
+                                 # click ANYWHERE (BETA 0.3.52) -- emitted
+                                 # from _run_mouse_listener()'s pynput
+                                 # thread, same cross-thread-safety
+                                 # reasoning as reply/done above. Used to
+                                 # dismiss a sticky INFO/ERROR card or the
+                                 # hover panel when the person clicks
+                                 # somewhere that isn't either -- including
+                                 # somewhere outside this app entirely,
+                                 # which a plain Qt event filter could
+                                 # never see (Qt only gets events for its
+                                 # own windows).
 
 
 _bridge = _Bridge()   # module-level singleton so voice_pipeline.py can import it
+
+
+# ── shared popup entrance/exit animation (BETA 0.3.52) ───────────────────────
+#
+# Every frameless popup in this file (_ReplyBubble, _DoneNote,
+# _CommandsPanel) used to just self.show()/self.hide() instantly -- a hard
+# cut with no transition. These two helpers give all of them the same
+# smooth fade + short slide, so "the widget turns into a display card"
+# actually reads as one continuous motion instead of a jump-cut.
+#
+# Animation objects are stored as attributes ON THE WIDGET itself (not
+# local variables in these functions) -- PyQt/Qt garbage-collects a
+# QPropertyAnimation the moment its last Python reference goes out of
+# scope, which for a local variable is the instant the function returns,
+# well before a 150-200ms animation has actually finished running.
+# Confirmed this is a real, not theoretical, footgun: an early version of
+# this fix used local variables and the animations visibly, silently cut
+# off partway through every time. Storing them on the widget keeps a
+# live reference for the animation's full duration.
+def _popup_fade_in(widget: QWidget, target_pos: QPoint, duration: int = 170, slide_px: int = 10) -> None:
+    for attr in ("_anim_in_opacity", "_anim_in_pos", "_anim_out_opacity"):
+        anim = getattr(widget, attr, None)
+        if anim is not None:
+            anim.stop()
+
+    start_pos = QPoint(target_pos.x(), target_pos.y() + slide_px)
+    widget.setWindowOpacity(0.0)
+    widget.move(start_pos)
+    widget.show()
+
+    widget._anim_in_opacity = QPropertyAnimation(widget, b"windowOpacity")
+    widget._anim_in_opacity.setDuration(duration)
+    widget._anim_in_opacity.setStartValue(0.0)
+    widget._anim_in_opacity.setEndValue(1.0)
+    widget._anim_in_opacity.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    widget._anim_in_pos = QPropertyAnimation(widget, b"pos")
+    widget._anim_in_pos.setDuration(duration)
+    widget._anim_in_pos.setStartValue(start_pos)
+    widget._anim_in_pos.setEndValue(target_pos)
+    widget._anim_in_pos.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    widget._anim_in_opacity.start()
+    widget._anim_in_pos.start()
+
+
+def _popup_fade_out(widget: QWidget, duration: int = 130) -> None:
+    """Quick fade-out, then hide. No-op if already hidden (avoids
+    restarting a fade on something that isn't visible, e.g. a dismiss
+    triggered twice in quick succession)."""
+    if not widget.isVisible():
+        return
+    for attr in ("_anim_in_opacity", "_anim_in_pos", "_anim_out_opacity"):
+        anim = getattr(widget, attr, None)
+        if anim is not None:
+            anim.stop()
+
+    widget._anim_out_opacity = QPropertyAnimation(widget, b"windowOpacity")
+    widget._anim_out_opacity.setDuration(duration)
+    widget._anim_out_opacity.setStartValue(widget.windowOpacity())
+    widget._anim_out_opacity.setEndValue(0.0)
+    widget._anim_out_opacity.setEasingCurve(QEasingCurve.Type.InCubic)
+    widget._anim_out_opacity.finished.connect(widget.hide)
+    widget._anim_out_opacity.start()
 
 
 # ── scheduled-commands hover panel ──────────────────────────────────────────
@@ -152,39 +248,30 @@ class _CommandsPanel(QFrame):
         self._items: List[Tuple[str, str, float]] = []  # (id, desc, fire_at)
         self._scheduler = None   # ScheduledCommandManager or None
 
-        # ── panel frame
+        # ── panel frame (see ui_theme.py: OUTER_MARGINS is coupled to the
+        # shadow below -- shrinking it makes the shadow paint outside the
+        # window's buffer, which silently kills rendering on Windows).
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(*OUTER_MARGINS)
 
         self._card = QFrame(self)
         self._card.setObjectName("card")
-        self._card.setStyleSheet("""
-            QFrame#card {
-                background: rgba(8, 10, 18, 220);
-                border: 1px solid rgba(55, 138, 221, 60);
-                border-radius: 12px;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(28)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 6)
-        self._card.setGraphicsEffect(shadow)
+        self._card.setStyleSheet(card_qss("card", "blue"))
+        self._card.setGraphicsEffect(make_shadow())
         outer.addWidget(self._card)
 
         self._layout = QVBoxLayout(self._card)
-        self._layout.setContentsMargins(14, 12, 14, 12)
-        self._layout.setSpacing(8)
+        self._layout.setContentsMargins(16, 14, 16, 14)
+        self._layout.setSpacing(10)
 
-        self._header = QLabel("Scheduled commands")
+        self._header = QLabel("SCHEDULED COMMANDS")
         self._header.setStyleSheet(
-            "color: rgba(181, 212, 244, 160); font: 600 10px 'Inter', sans-serif;"
-            "letter-spacing: 0.08em; text-transform: uppercase;"
+            f"color: {TEXT_MUTED}; {font_css(10, 600, tracking='letter-spacing: 0.09em;')}"
         )
         self._layout.addWidget(self._header)
 
         self._body = QVBoxLayout()
-        self._body.setSpacing(4)
+        self._body.setSpacing(6)
         self._layout.addLayout(self._body)
 
         self._refresh_timer = QTimer(self)
@@ -197,17 +284,17 @@ class _CommandsPanel(QFrame):
         self._scheduler = scheduler
 
     def popup_below(self, anchor_rect: QRect) -> None:
-        """Position below anchor_rect and show."""
+        """Position below anchor_rect and show, with a smooth fade+slide
+        entrance (see _popup_fade_in) rather than an instant show()."""
         self._refresh()
         self.adjustSize()
         x = anchor_rect.center().x() - self.width() // 2
         y = anchor_rect.bottom() + 6
-        self.move(x, max(0, y))
-        self.show()
+        _popup_fade_in(self, QPoint(x, max(0, y)))
         self._refresh_timer.start()
 
     def hide_panel(self) -> None:
-        self.hide()
+        _popup_fade_out(self)
         self._refresh_timer.stop()
 
     # ── internals ───────────────────────────────────────────────────────────
@@ -228,16 +315,14 @@ class _CommandsPanel(QFrame):
 
         if not items:
             lbl = QLabel("Nothing scheduled")
-            lbl.setStyleSheet(
-                "color: rgba(181,212,244,60); font: 12px 'Inter', sans-serif;"
-            )
+            lbl.setStyleSheet(f"color: {TEXT_FAINT}; {font_css(12)}")
             self._body.addWidget(lbl)
             self.adjustSize()
             return
 
         for it in items:
             row = QHBoxLayout()
-            row.setSpacing(10)
+            row.setSpacing(12)
 
             secs = it.seconds_remaining()
             if secs >= 3600:
@@ -248,33 +333,18 @@ class _CommandsPanel(QFrame):
                 countdown = f"{int(secs)}s"
 
             desc = QLabel(f"{it.id}  ·  {it.description}")
-            desc.setStyleSheet(
-                "color: rgba(181,212,244,200); font: 13px 'Inter', sans-serif;"
-            )
+            desc.setStyleSheet(f"color: {TEXT_PRIMARY}; {font_css(13)}")
             desc.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             row.addWidget(desc)
 
             clock = QLabel(countdown)
-            clock.setStyleSheet(
-                "color: rgba(55,138,221,200); font: 600 12px 'Inter', sans-serif;"
-            )
+            clock.setStyleSheet(f"color: {ACCENT['blue']['solid']}; {font_css(12, 600)}")
             row.addWidget(clock)
 
             btn = QPushButton("✕")
-            btn.setFixedSize(22, 22)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: rgba(226,75,74,30);
-                    border: 1px solid rgba(226,75,74,60);
-                    border-radius: 11px;
-                    color: rgba(226,75,74,200);
-                    font: 11px;
-                }
-                QPushButton:hover {
-                    background: rgba(226,75,74,90);
-                    color: #fff;
-                }
-            """)
+            btn.setFixedSize(24, 24)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(button_qss("red", size=24))
             item_id = it.id
             btn.clicked.connect(lambda _checked, iid=item_id: self._on_cancel(iid))
             row.addWidget(btn)
@@ -292,15 +362,253 @@ class _CommandsPanel(QFrame):
         self._refresh()
 
 
+# ── dictation stop panel ("start listening" widget) ─────────────────────────
+#
+# BETA 0.3.44. Deliberately its own tiny panel, not folded into
+# _CommandsPanel above -- a scheduled-command list and a single always-on
+# stop button don't share layout or lifecycle (this has no per-item rows,
+# no auto-refresh timer, no scheduler dependency), so forcing them into one
+# class would only have made both harder to follow for no real code
+# sharing gained. Same frameless/translucent/shadow styling as
+# _CommandsPanel purely for visual consistency with the rest of the
+# overlay, copied rather than shared for the same reason.
+#
+# Design-doc interpretation call (see STATUS.md for the full reasoning):
+# the original wording was "the user types control clicks the stop button"
+# -- read here as a plain click on this dedicated button, not a
+# Ctrl+modifier click. A dedicated button that only exists while dictation
+# is active has nothing else on it competing for an accidental plain
+# click, so a modifier requirement wasn't worth the extra friction of
+# "remember to hold Ctrl" for something meant to be a fast, obvious exit.
+
+class _DictationStopPanel(QFrame):
+    """Small floating panel with one button. Shown for the entire
+    duration of a dictation session (start_dictation() → stop_dictation()),
+    hidden the rest of the time -- see DesktopMark._on_dictation_active()."""
+
+    stop_clicked = pyqtSignal()
+
+    def __init__(self, parent: QWidget):
+        super().__init__(
+            parent,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+        # See _CommandsPanel's constructor above for why these margins can't
+        # be zero: they have to contain the drop shadow's blur bleed below.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(*OUTER_MARGINS)
+
+        card = QFrame(self)
+        card.setObjectName("dictationCard")
+        card.setStyleSheet(card_qss("dictationCard", "orange"))
+        card.setGraphicsEffect(make_shadow())
+        outer.addWidget(card)
+
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 12, 12, 12)
+        row.setSpacing(12)
+
+        dot = QLabel()
+        dot.setFixedSize(8, 8)
+        dot.setStyleSheet(
+            f"background: {ACCENT['orange']['solid']}; border-radius: 4px;"
+        )
+        row.addWidget(dot)
+
+        label = QLabel("Listening…")
+        label.setStyleSheet(f"color: {TEXT_PRIMARY}; {font_css(12, 600)}")
+        row.addWidget(label)
+
+        stop_btn = QPushButton("Stop")
+        stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        stop_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT['orange']['solid']};
+                color: white;
+                border: none;
+                border-radius: {RADIUS_SM}px;
+                padding: 6px 16px;
+                {font_css(12, 600)}
+            }}
+            QPushButton:hover {{ background: #EF9468; }}
+            QPushButton:pressed {{ background: #C96A3C; }}
+        """)
+        stop_btn.clicked.connect(self.stop_clicked.emit)
+        row.addWidget(stop_btn)
+
+    def popup_below(self, anchor_rect: QRect) -> None:
+        self.adjustSize()
+        x = anchor_rect.center().x() - self.width() // 2
+        y = anchor_rect.bottom() + 6
+        self.move(x, max(0, y))
+        self.show()
+
+    def hide_panel(self) -> None:
+        self.hide()
+
+
 # ── floating reply bubble (appears next to the mark, fades after 3s) ────────
 
 class _ReplyBubble(QFrame):
     """
-    Frameless popup that shows TOKI's last text reply next to the mark,
-    then auto-hides after REPLY_SHOW_MS. Same visual language/pattern as
-    _CommandsPanel (rounded card, drop shadow) so it reads as part of the
-    same UI rather than a different widget style.
+    Frameless popup that shows TOKI's last text reply next to the mark.
+    Same visual language/pattern as _CommandsPanel (rounded card, drop
+    shadow) so it reads as part of the same UI rather than a different
+    widget style.
+
+    Two display modes, added alongside display_strategy.py (BETA
+    0.3.51): the default call from show_reply() -- drag/drop feedback,
+    permission-gate confirmations, and anything else that doesn't go
+    through the new classify_display() path -- keeps the original
+    behavior exactly: blue accent, auto-hides after REPLY_SHOW_MS.
+    DesktopMark.show_result() instead calls show_below(..., persistent=True,
+    accent=...) for INFO/ERROR turns: no auto-hide timer (a "did you mean
+    X?" question or a real file listing must not vanish before it's
+    read), a taller scrollable body for longer content (a directory
+    listing can run to dozens of lines), and an accent that matches the
+    strategy ("blue" for info, "red" for error). Click-anywhere-to-dismiss
+    is the only way a persistent card goes away on its own.
     """
+
+    # Non-persistent (show_reply's original behavior) content stays
+    # short -- cap the scroll area low so it never grows the popup's
+    # footprint. Persistent (INFO/ERROR) content can run much longer
+    # (a real directory listing, a generated file's contents), so it
+    # gets a taller viewport with internal scrolling instead of an
+    # ever-growing window.
+    _SCROLL_MAX_H_TRANSIENT = 90
+    _SCROLL_MAX_H_PERSISTENT = 340
+
+    def __init__(self):
+        super().__init__(
+            None,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+        # See _CommandsPanel's constructor above for why these margins can't
+        # be zero: they have to contain the drop shadow's blur bleed below.
+        # This is the reply bubble specifically -- the fix here is what
+        # makes TOKI's actual answers (including "did you mean X?"
+        # clarifying questions and yes/no confirmation prompts) visible at
+        # all; they were rendering to an off-screen/invalid buffer before.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(*OUTER_MARGINS)
+
+        self._card = QFrame(self)
+        self._card.setObjectName("replycard")
+        self._card.setStyleSheet(card_qss("replycard", "blue"))
+        self._card.setGraphicsEffect(make_shadow())
+        outer.addWidget(self._card)
+
+        inner = QVBoxLayout(self._card)
+        inner.setContentsMargins(16, 12, 16, 14)
+        inner.setSpacing(4)
+
+        self._eyebrow = QLabel("TOKI")
+        self._eyebrow.setStyleSheet(
+            f"color: {ACCENT['blue']['solid']}; {font_css(9, 700, tracking='letter-spacing: 0.12em;')}"
+        )
+        inner.addWidget(self._eyebrow)
+
+        self._label = QLabel("")
+        self._label.setWordWrap(True)
+        self._label.setMaximumWidth(360)
+        self._label.setStyleSheet(f"color: {TEXT_PRIMARY}; {font_css(13)}")
+
+        # Scroll area so long INFO/ERROR content (a directory listing, a
+        # generated file's contents) doesn't grow the popup off-screen --
+        # it scrolls internally instead. Transparent background + no
+        # frame so it reads as part of the same card, not a nested
+        # widget with its own visible edges.
+        self._scroll = QScrollArea(self._card)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setStyleSheet("background: transparent; border: none;")
+        self._scroll.viewport().setStyleSheet("background: transparent;")
+        _scroll_inner = QWidget()
+        _scroll_inner.setStyleSheet("background: transparent;")
+        _scroll_layout = QVBoxLayout(_scroll_inner)
+        _scroll_layout.setContentsMargins(0, 0, 0, 0)
+        _scroll_layout.addWidget(self._label)
+        self._scroll.setWidget(_scroll_inner)
+        self._scroll.setMaximumHeight(self._SCROLL_MAX_H_TRANSIENT)
+        inner.addWidget(self._scroll)
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(lambda: _popup_fade_out(self))
+
+        self._persistent = False
+
+    def show_below(
+        self,
+        anchor_rect: QRect,
+        text: str,
+        accent: str = "blue",
+        persistent: bool = False,
+    ) -> None:
+        if not text:
+            return
+        self._card.setStyleSheet(card_qss("replycard", accent))
+        self._eyebrow.setStyleSheet(
+            f"color: {ACCENT[accent]['solid']}; {font_css(9, 700, tracking='letter-spacing: 0.12em;')}"
+        )
+        self._eyebrow.setText("TOKI" if accent != "red" else "TOKI · ERROR")
+        self._label.setMaximumWidth(420 if persistent else 360)
+        self._scroll.setMaximumHeight(
+            self._SCROLL_MAX_H_PERSISTENT if persistent else self._SCROLL_MAX_H_TRANSIENT
+        )
+        self._label.setText(text)
+        self.adjustSize()
+        x = anchor_rect.center().x() - self.width() // 2
+        y = anchor_rect.bottom() + 6
+        # keep on-screen horizontally
+        screen = QApplication.primaryScreen().geometry()
+        x = max(4, min(x, screen.width() - self.width() - 4))
+        _popup_fade_in(self, QPoint(x, max(0, y)))
+        self._persistent = persistent
+        if persistent:
+            self._hide_timer.stop()
+        else:
+            self._hide_timer.start(REPLY_SHOW_MS)
+
+    def cancel_autohide(self) -> None:
+        """Used by the hover panel: keep the last reply visible while
+        the user is actively looking at the panel, instead of racing
+        the 3s fade against their mouse movement."""
+        self._hide_timer.stop()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Persistent INFO/ERROR cards have no auto-hide timer -- clicking
+        # anywhere on the card is the dismiss gesture. Transient cards
+        # (the original show_reply() behavior) just let the click pass
+        # through to their normal fade-out; no need to special-case them.
+        if self._persistent:
+            _popup_fade_out(self)
+        super().mousePressEvent(event)
+
+
+class _DoneNote(QFrame):
+    """
+    Tiny, quick-fading confirmation pill for DONE-strategy turns (see
+    display_strategy.py) -- an action happened, there's nothing to read,
+    just a quick "✓ Done" so it's visible without lingering the way an
+    INFO/ERROR _ReplyBubble deliberately does. Kept as its own small
+    class rather than a third mode on _ReplyBubble because the DONE
+    treatment is meant to look and feel different at a glance -- smaller,
+    quieter, gone almost as soon as it's noticed.
+    """
+
+    DONE_SHOW_MS = 1400
 
     def __init__(self):
         super().__init__(
@@ -313,58 +621,45 @@ class _ReplyBubble(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(*OUTER_MARGINS)
 
-        card = QFrame(self)
-        card.setObjectName("replycard")
-        card.setStyleSheet("""
-            QFrame#replycard {
-                background: rgba(8, 10, 18, 220);
-                border: 1px solid rgba(55, 138, 221, 60);
-                border-radius: 12px;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(28)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 6)
-        card.setGraphicsEffect(shadow)
-        outer.addWidget(card)
+        pill = QFrame(self)
+        pill.setObjectName("donepill")
+        pill.setStyleSheet(card_qss("donepill", "green"))
+        pill.setGraphicsEffect(make_shadow())
+        outer.addWidget(pill)
 
-        inner = QVBoxLayout(card)
-        inner.setContentsMargins(14, 10, 14, 10)
+        inner = QHBoxLayout(pill)
+        inner.setContentsMargins(14, 8, 14, 8)
+        inner.setSpacing(6)
 
         self._label = QLabel("")
         self._label.setWordWrap(True)
-        self._label.setMaximumWidth(320)
-        self._label.setStyleSheet(
-            "color: rgba(181,212,244,230); font: 13px 'Inter', sans-serif;"
-        )
+        self._label.setMaximumWidth(280)
+        self._label.setStyleSheet(f"color: {ACCENT['green']['solid']}; {font_css(12, 700)}")
         inner.addWidget(self._label)
 
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self.hide)
+        self._hide_timer.timeout.connect(lambda: _popup_fade_out(self, duration=110))
 
-    def show_below(self, anchor_rect: QRect, text: str) -> None:
-        if not text:
-            return
+    def show_below(self, anchor_rect: QRect, detail: str = "") -> None:
+        # Most DONE response text from orchestrator.py already starts
+        # with a literal "Done." (e.g. "Done. Scheduled as sch_1: ...")
+        # -- strip that prefix so the pill doesn't read "✓ Done — Done.
+        # Scheduled...".
+        detail = (detail or "").strip()
+        if detail.startswith("Done."):
+            detail = detail[len("Done."):].strip(" .")
+        text = f"✓ Done — {detail}" if detail else "✓ Done"
         self._label.setText(text)
         self.adjustSize()
         x = anchor_rect.center().x() - self.width() // 2
         y = anchor_rect.bottom() + 6
-        # keep on-screen horizontally
         screen = QApplication.primaryScreen().geometry()
         x = max(4, min(x, screen.width() - self.width() - 4))
-        self.move(x, max(0, y))
-        self.show()
-        self._hide_timer.start(REPLY_SHOW_MS)
-
-    def cancel_autohide(self) -> None:
-        """Used by the hover panel: keep the last reply visible while
-        the user is actively looking at the panel, instead of racing
-        the 3s fade against their mouse movement."""
-        self._hide_timer.stop()
+        _popup_fade_in(self, QPoint(x, max(0, y)), duration=130, slide_px=6)
+        self._hide_timer.start(self.DONE_SHOW_MS)
 
 
 # ── double-click prompt box (typed input, no chat window) ───────────────────
@@ -388,41 +683,24 @@ class _PromptBox(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
+        # See _CommandsPanel's constructor above for why these margins can't
+        # be zero: they have to contain the drop shadow's blur bleed below.
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(*OUTER_MARGINS)
 
         card = QFrame(self)
         card.setObjectName("promptcard")
-        card.setStyleSheet("""
-            QFrame#promptcard {
-                background: rgba(8, 10, 18, 235);
-                border: 1px solid rgba(55, 138, 221, 90);
-                border-radius: 12px;
-            }
-        """)
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(28)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 6)
-        card.setGraphicsEffect(shadow)
+        card.setStyleSheet(card_qss("promptcard", "blue"))
+        card.setGraphicsEffect(make_shadow())
         outer.addWidget(card)
 
         inner = QVBoxLayout(card)
-        inner.setContentsMargins(10, 8, 10, 8)
+        inner.setContentsMargins(12, 10, 12, 10)
 
         self._edit = QLineEdit()
         self._edit.setPlaceholderText("Type a command…")
-        self._edit.setMinimumWidth(280)
-        self._edit.setStyleSheet("""
-            QLineEdit {
-                background: rgba(20, 24, 38, 200);
-                border: 1px solid rgba(55, 138, 221, 60);
-                border-radius: 8px;
-                padding: 6px 10px;
-                color: rgba(230, 240, 250, 230);
-                font: 13px 'Inter', sans-serif;
-            }
-        """)
+        self._edit.setMinimumWidth(300)
+        self._edit.setStyleSheet(line_edit_qss("blue"))
         self._edit.returnPressed.connect(self._on_submit)
         inner.addWidget(self._edit)
 
@@ -468,12 +746,29 @@ class DesktopMark(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
-        self._state: str = "idle"    # "idle" | "listening" | "working"
+        self._state: str = "idle"    # "idle" | "listening" | "working" | "engaged"
+        # "engaged" (BETA 0.3.52): mark stays at active size/position
+        # showing a persistent INFO/ERROR card -- see show_result() and
+        # _dismiss_sticky_ui() below.
         self._scheduler = None
         self._dispatch_fn: Optional[Callable[[str], None]] = None
         self._assistant = None          # WindowsAIAssistant or None, for permission gate
         self._last_reply: str = ""
         self._home_rect: Optional[QRect] = None   # set once the user drags the mark
+
+        # ── sticky/persistent UI state (BETA 0.3.52) ───────────────────────
+        # An INFO/ERROR reply card and/or the hover "scheduled commands"
+        # panel, once genuinely opened, stay on screen until the person
+        # explicitly dismisses them -- clicking anywhere else (tracked
+        # globally, not just within this app -- see _start_global_click_
+        # listener()) or pressing Ctrl+K again (_on_hotkey). Neither used
+        # to behave this way: the reply card used to auto-fade after 3s
+        # regardless of content, and the hover panel used to auto-collapse
+        # the instant the mouse left its geometry -- both of which could
+        # yank away content, or a whole scheduled-commands list mid-
+        # interaction, before the person was done with it.
+        self._sticky_reply_active = False
+        self._sticky_panel_active = False
 
         # ── drag / click-disambiguation state
         # Long-press-to-drag and single/double click all arrive through the
@@ -505,10 +800,13 @@ class DesktopMark(QWidget):
 
         # ── scheduled-commands panel
         self._panel = _CommandsPanel(None)   # top-level window
-        self._panel_hover_timer = QTimer(self)
-        self._panel_hover_timer.setSingleShot(True)
-        self._panel_hover_timer.setInterval(200)
-        self._panel_hover_timer.timeout.connect(self._maybe_hide_panel)
+        # BETA 0.3.52: no more mouse-leave auto-hide timer here -- the
+        # panel is sticky once opened (see _expand_for_hover /
+        # _dismiss_sticky_ui below).
+
+        # ── dictation stop panel (see AppController.start_dictation())
+        self._dictation_panel = _DictationStopPanel(None)   # top-level window
+        self._dictation_panel.stop_clicked.connect(self._on_dictation_stop_clicked)
 
         # dwell timer: enterEvent starts this instead of expanding
         # immediately; only actually expands if the mouse is still there
@@ -520,6 +818,7 @@ class DesktopMark(QWidget):
 
         # ── reply bubble (fades after REPLY_SHOW_MS) + typed-prompt box
         self._reply_bubble = _ReplyBubble()
+        self._done_note = _DoneNote()   # BETA 0.3.51: see show_result() below
         self._prompt_box = _PromptBox()
         self._prompt_box.submitted.connect(self._on_prompt_submitted)
 
@@ -535,8 +834,16 @@ class DesktopMark(QWidget):
         _bridge.hotkey.connect(self._on_hotkey)
         _bridge.listening.connect(self._on_listening)
         _bridge.working.connect(self._on_working)
-        _bridge.done.connect(self.idle)
+        # NOT connected directly to self.idle anymore (BETA 0.3.52): a
+        # turn finishing doesn't always mean "go idle" now -- an INFO/
+        # ERROR result puts the mark into "engaged" state instead (see
+        # show_result()), and _on_turn_done() is what actually decides
+        # whether idle() is appropriate for the current state.
+        _bridge.done.connect(self._on_turn_done)
         _bridge.reply.connect(self.show_reply)
+        _bridge.result_ready.connect(self.show_result)
+        _bridge.dictation_active.connect(self._on_dictation_active)
+        _bridge.global_click.connect(self._on_global_click)
 
         # ── position: start peeking at top-centre
         self._go_to_idle(animated=False)
@@ -555,8 +862,10 @@ class DesktopMark(QWidget):
         # walking Explorer's UIA tree across Windows versions/themes.
         self.setAcceptDrops(True)
 
-        # start the hotkey listener
+        # start the hotkey listener + the global click-outside-to-dismiss
+        # listener (BETA 0.3.52)
         _start_hotkey_listener()
+        _start_global_click_listener()
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -600,11 +909,42 @@ class DesktopMark(QWidget):
         self._view.set_mood("lifeless")
         QTimer.singleShot(800, self.idle)
 
+    def show_dictation_panel(self) -> None:
+        """Shown for the duration of a dictation session -- see
+        AppController.start_dictation() / _bridge.dictation_active."""
+        self._dictation_panel.popup_below(self.geometry())
+
+    def hide_dictation_panel(self) -> None:
+        self._dictation_panel.hide_panel()
+
+    @pyqtSlot(bool)
+    def _on_dictation_active(self, active: bool) -> None:
+        if active:
+            self.show_dictation_panel()
+        else:
+            self.hide_dictation_panel()
+
+    def _on_dictation_stop_clicked(self) -> None:
+        # Just relays the click onward -- main_widget.py is the one that
+        # actually holds the AppController/orchestrator reference and
+        # calls stop_dictation(), same separation as set_dispatch()'s
+        # callback above: this widget module doesn't import orchestrator.py
+        # or app_control.py directly anywhere else either.
+        _bridge.dictation_stop_clicked.emit()
+
     # ── internal state transitions ───────────────────────────────────────────
 
     @pyqtSlot()
     def _on_hotkey(self) -> None:
-        """Ctrl+K pressed.  If idle → go active.  If already listening → extend."""
+        """Ctrl+K pressed. First dismisses any sticky/persistent display
+        that's currently up (BETA 0.3.52) -- pressing Ctrl+K again is
+        both "I'm done reading that" and "start a new command", so it
+        does both rather than overloading the hotkey into a pure
+        close-only action (which would silently eat the very next Ctrl+K
+        press someone expects to start listening with). Then: if idle →
+        go active. If already listening → extend."""
+        if self._sticky_reply_active or self._sticky_panel_active:
+            self._dismiss_sticky_ui()
         if self._state == "listening":
             # signal pipeline to extend its silence window
             from voice_pipeline import extend_listening
@@ -709,11 +1049,20 @@ class DesktopMark(QWidget):
         event.acceptProposedAction()
 
     # ── hover panel ──────────────────────────────────────────────────────────
+    #
+    # BETA 0.3.52: once genuinely opened (HOVER_INTENT_MS dwell confirmed,
+    # not just a brush-past), the panel no longer auto-collapses the
+    # instant the mouse leaves its geometry -- it's "sticky" now, same as
+    # a persistent INFO/ERROR reply card, and only closes via the shared
+    # _dismiss_sticky_ui() path (click anywhere else, or Ctrl+K). This
+    # matters most while actually interacting with it: cancelling a
+    # scheduled item involves moving the mouse toward a small ✕ button,
+    # and the old mouse-leaves-geometry-for-200ms auto-hide could easily
+    # fire mid-click on a fast or imprecise mouse move, closing the panel
+    # out from under the very click meant to use it.
 
     def enterEvent(self, event) -> None:
         super().enterEvent(event)
-        # cancel any pending hide -- mouse is back before it fired
-        self._panel_hover_timer.stop()
         if self._state == "idle":
             # don't expand instantly: wait HOVER_INTENT_MS to confirm this
             # is an actual hover and not a brush-past on the way to
@@ -734,29 +1083,21 @@ class DesktopMark(QWidget):
         )
         self._animate_to(visible_rect)
         self._panel.popup_below(visible_rect)
-        # keep the last reply on screen while the panel is up rather
-        # than letting its own 3s timer race the user's mouse -- the
-        # panel's own hide (_maybe_hide_panel) already handles hiding
-        # everything again once the mouse actually leaves both.
+        self._sticky_panel_active = True
+        # keep the last reply on screen while the panel is up, rather
+        # than letting its own timer race the user's mouse -- both are
+        # sticky now and dismiss together via _dismiss_sticky_ui().
         if self._last_reply:
             self._reply_bubble.cancel_autohide()
             self._reply_bubble.show_below(visible_rect, self._last_reply)
 
     def leaveEvent(self, event) -> None:
         super().leaveEvent(event)
-        # cancel a not-yet-fired expand -- this was just a brush-past
+        # Only cancels a not-yet-fired expand (this was just a brush-past
+        # that never actually opened the panel) -- once the panel IS open
+        # (self._sticky_panel_active), leaving no longer closes anything;
+        # see the class-level comment above this section for why.
         self._hover_intent_timer.stop()
-        # brief grace period so mouse can move to the panel
-        self._panel_hover_timer.start()
-
-    def _maybe_hide_panel(self) -> None:
-        cursor = QCursor.pos()
-        if self.geometry().contains(cursor) or self._panel.geometry().contains(cursor):
-            return
-        self._panel.hide_panel()
-        self._reply_bubble.hide()
-        if self._state == "idle":
-            self._go_to_idle(animated=True)
 
     # ── mouse: click (stop-listening-now) / double-click (type) /
     #           long-press (drag) ───────────────────────────────────────────
@@ -851,6 +1192,8 @@ class DesktopMark(QWidget):
         _bridge.hotkey.emit()
 
     def _show_prompt_box(self) -> None:
+        if self._sticky_reply_active or self._sticky_panel_active:
+            self._dismiss_sticky_ui()
         anchor = QRect(self.geometry())
         self._prompt_box.popup_below(anchor)
 
@@ -870,11 +1213,124 @@ class DesktopMark(QWidget):
         anchor = QRect(self.geometry())
         self._reply_bubble.show_below(anchor, text)
 
+    def show_result(self, strategy: str, text: str) -> None:
+        """BETA 0.3.51/0.3.52: routes a classified turn result (see
+        display_strategy.classify_display()) to the display treatment
+        that actually fits it, instead of every response -- 'Done.',
+        a full directory listing, a clarifying question, a failure --
+        going through the same 3-second auto-fading bubble:
+
+          "done"  -> a small, quick-fading confirmation pill. Nothing to
+                     read, just a quick acknowledgement -- the mark drops
+                     straight back to idle right after (see
+                     _on_turn_done()).
+          "info"  -> the reply bubble in its persistent "island" mode
+                     (blue accent, no auto-hide, scrolls internally for
+                     longer content) -- for anything the person actually
+                     needs to read: a listing, a reading, a question,
+                     generated content. The mark stays at its expanded
+                     size/position ("engaged" state) the whole time the
+                     card is up, instead of shrinking back to the tiny
+                     idle notch while a big card hangs below it -- that
+                     mismatch (small notch, large disconnected card)
+                     was the first thing that looked broken when this was
+                     tried without it. Dismisses (both card and mark)
+                     together -- see _dismiss_sticky_ui().
+          "error" -> the same persistent island + engaged mark, red
+                     accent instead.
+
+        Keeps self._last_reply in sync either way, same field the hover
+        panel reads as "previous reply"."""
+        self._last_reply = text or ""
+        if not text:
+            return
+        anchor = QRect(self.geometry())
+        if strategy == "done":
+            self._sticky_reply_active = False
+            self._done_note.show_below(anchor, text)
+        else:
+            # "info" and any unrecognized strategy default to the safe,
+            # persistent path -- see display_strategy.py's own comment on
+            # why INFO is the safer unknown-case default (losing content
+            # to an over-eager auto-fade is worse than an unnecessary
+            # persistent card).
+            accent = "red" if strategy == "error" else "blue"
+            self._reply_bubble.show_below(anchor, text, accent=accent, persistent=True)
+            self._sticky_reply_active = True
+            self._state = "engaged"
+            self._view.set_mood("calm")
+            # deliberately no _go_to_idle / _go_to_active call here: the
+            # mark is already sitting at the active rect from working()
+            # (see _on_working) -- staying put IS the "turns into the
+            # display box and holds" behavior. It only moves again when
+            # the card is dismissed (_dismiss_sticky_ui) or a new turn
+            # starts.
+
+    @pyqtSlot()
+    def _on_turn_done(self) -> None:
+        """Connected to _bridge.done (BETA 0.3.52, replacing a direct
+        connection to self.idle). A turn finishing doesn't always mean
+        "go idle" anymore -- show_result() may have just put the mark
+        into "engaged" state for a persistent INFO/ERROR card, and that
+        state should hold until the person actually dismisses it
+        (_dismiss_sticky_ui), not collapse the instant the card appears."""
+        if self._state == "engaged":
+            return
+        self.idle()
+
+    def _dismiss_sticky_ui(self) -> None:
+        """Smoothly collapses whatever sticky/persistent UI is open --
+        an INFO/ERROR reply card and/or the hover 'scheduled commands'
+        panel -- back down. Triggered by a click anywhere else (tracked
+        globally, see _on_global_click) or Ctrl+K pressed again
+        (_on_hotkey). This is the 'display turns back into the widget'
+        half of the transition; show_result()'s persistent path above is
+        the other half."""
+        if self._sticky_reply_active:
+            _popup_fade_out(self._reply_bubble)
+            self._sticky_reply_active = False
+        if self._sticky_panel_active:
+            _popup_fade_out(self._panel)
+            self._panel._refresh_timer.stop()
+            self._sticky_panel_active = False
+        if self._state == "engaged":
+            self._state = "idle"
+            self._view.set_mood("calm")
+            self._go_to_idle(animated=True)
+        elif self._state == "idle":
+            # the hover-panel-only case: state was never anything but
+            # "idle" during a hover peek (_expand_for_hover explicitly
+            # only runs when self._state == "idle" and never changes it)
+            # -- but the notch itself is currently sitting at its fully-
+            # visible "peeking" position rather than off-screen, so it
+            # still needs to slide back regardless of which sticky thing
+            # (if either) was actually open.
+            self._go_to_idle(animated=True)
+
+    @pyqtSlot(int, int)
+    def _on_global_click(self, x: int, y: int) -> None:
+        """A left click anywhere on screen (BETA 0.3.52) -- see
+        _run_mouse_listener(). Dismisses sticky UI if the click landed
+        outside every surface that's currently sticky; otherwise (click
+        was on the mark itself, the reply card, or the panel) does
+        nothing and lets that widget's own click handling take over."""
+        if not (self._sticky_reply_active or self._sticky_panel_active):
+            return
+        pt = QPoint(x, y)
+        surfaces = [self.geometry()]
+        if self._sticky_reply_active:
+            surfaces.append(self._reply_bubble.geometry())
+        if self._sticky_panel_active:
+            surfaces.append(self._panel.geometry())
+        if any(rect.contains(pt) for rect in surfaces):
+            return
+        self._dismiss_sticky_ui()
+
     # ── tray icon ────────────────────────────────────────────────────────────
 
     def _build_tray(self) -> QSystemTrayIcon:
         pix = QPixmap(16, 16)
-        pix.fill(QColor("#378ADD"))
+        pix.fill(QColor(ACCENT["blue"]["solid"]))
         tray = QSystemTrayIcon(QIcon(pix), self)
         tray.setToolTip("TOKI  ·  Ctrl+K to speak")
 
@@ -956,6 +1412,65 @@ def _run_listener() -> None:
             ctrl_held = False
 
     with kb.Listener(on_press=on_press, on_release=on_release, suppress=False) as listener:
+        listener.join()
+
+
+# ── global click-outside-to-dismiss listener (pynput, background thread) ─────
+#
+# BETA 0.3.52. Same pattern and thread-safety reasoning as
+# _start_hotkey_listener() above -- a second lightweight pynput listener,
+# this time for mouse clicks, so a sticky INFO/ERROR reply card or the
+# hover panel can be dismissed by clicking anywhere, including outside
+# this app's own windows entirely (a plain Qt event filter only ever sees
+# events for Qt's own windows -- it has no way to know about a click
+# landing on some other application, or bare desktop).
+#
+# Worth being upfront about the tradeoff this adds: this is a second
+# system-wide input hook running continuously (the app already has one,
+# for Ctrl+K), which costs a small amount of background CPU and is the
+# kind of capability some antivirus/security software flags more
+# cautiously than a single keyboard hook (global input hooks in general
+# resemble what a keylogger does, even though this one only ever reads
+# click coordinates -- never any keystroke content, window contents, or
+# which application/control was clicked). If that tradeoff isn't wanted,
+# the fix is to not call _start_global_click_listener() from
+# DesktopMark.__init__ -- everything else in this file still works
+# without it, just without click-anywhere dismissal (Ctrl+K still
+# dismisses either way, see _on_hotkey).
+_mouse_thread: Optional[threading.Thread] = None
+
+
+def _start_global_click_listener() -> None:
+    global _mouse_thread
+    if _mouse_thread is not None and _mouse_thread.is_alive():
+        return
+    _mouse_thread = threading.Thread(target=_run_mouse_listener, daemon=True, name="toki-mouse-dismiss")
+    _mouse_thread.start()
+
+
+def _run_mouse_listener() -> None:
+    """
+    Listens for left-clicks globally (pynput). Emits _bridge.global_click
+    with just (x, y) screen coordinates on the Qt thread via Qt's
+    signal/slot mechanism -- never anything about the click target itself
+    (no window title, no application, no clicked control), since all
+    DesktopMark._on_global_click() needs is "was this point inside one of
+    my own sticky widgets or not".
+    """
+    try:
+        from pynput import mouse as ms
+    except ImportError:
+        print(
+            "[TOKI] pynput not installed -- click-anywhere-to-dismiss disabled "
+            "(Ctrl+K still dismisses).\n       Fix: pip install pynput"
+        )
+        return
+
+    def on_click(x, y, button, pressed):
+        if pressed and button == ms.Button.left:
+            _bridge.global_click.emit(int(x), int(y))
+
+    with ms.Listener(on_click=on_click) as listener:
         listener.join()
 
 

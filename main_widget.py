@@ -47,7 +47,9 @@ WIRING DIAGRAM
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
+from typing import List, Tuple
 
 # Make sure we can import siblings when run from anywhere
 sys.path.insert(0, str(Path(__file__).parent))
@@ -57,6 +59,68 @@ from PyQt6.QtWidgets import QApplication
 
 from toki_desktop_mark import DesktopMark, _bridge
 from voice_pipeline import HotkeyVoicePipeline
+from display_strategy import DisplayStrategy, classify_display
+
+# How long to wait, on the background dispatch thread, for a powershell-kind
+# command's real completion (executor.RunningCommand's on_done callback)
+# before giving up and showing whatever output was collected so far. See
+# _await_powershell_result() below for why this wait exists at all.
+_POWERSHELL_RESULT_TIMEOUT_S = 30
+
+
+def _run_and_classify(orch, text: str) -> Tuple[str, str]:
+    """
+    Runs one turn through orch.process_request() and returns
+    (strategy_value, display_text) -- the pair display_strategy.classify_
+    display() decided on, ready to hand straight to
+    _bridge.result_ready.emit().
+
+    WHY THIS EXISTS AS ITS OWN FUNCTION
+    ------------------------------------
+    process_request() returns almost immediately for kind=="powershell":
+    it starts the actual PowerShell process on its own background thread
+    (executor.RunningCommand) and hands back a synchronous placeholder
+    response of literally "Done." -- the real stdout and exit code only
+    arrive afterward, streamed line-by-line into on_output and finished
+    via on_done. Every OTHER kind (api/chat/schedule/timer/app_control/
+    generate) is already fully resolved by the time process_request()
+    itself returns.
+
+    So: pass real on_output/on_done callbacks (not the no-ops main_widget
+    used before this fix -- which meant EVERY powershell-kind INFO
+    command, e.g. LIST_FILES, DISK_USAGE, READ_FILE, silently discarded
+    its actual output and showed nothing but "Done."), collect the
+    output, and -- only for kind=="powershell" -- block this background
+    thread (never the Qt thread; this always runs inside the caller's
+    own background dispatch thread) on a threading.Event that on_done
+    sets, bounded by _POWERSHELL_RESULT_TIMEOUT_S so a hung/slow command
+    can't wedge the turn forever.
+    """
+    output_lines: List[str] = []
+    done_event = threading.Event()
+    exit_code_holder: dict = {}
+
+    def _on_output(line: str) -> None:
+        output_lines.append(line)
+
+    def _on_done(exit_code: int) -> None:
+        exit_code_holder["code"] = exit_code
+        done_event.set()
+
+    result = orch.process_request(text, on_output=_on_output, on_done=_on_done)
+
+    timed_out = False
+    if (result or {}).get("kind") == "powershell":
+        completed = done_event.wait(timeout=_POWERSHELL_RESULT_TIMEOUT_S)
+        timed_out = not completed
+
+    strategy, display_text = classify_display(
+        result,
+        collected_output="\n".join(output_lines),
+        exit_code=exit_code_holder.get("code"),
+        timed_out=timed_out,
+    )
+    return strategy.value, display_text
 
 
 def _try_load_orchestrator():
@@ -100,26 +164,58 @@ def main() -> None:
     def _on_permission_confirm() -> None:
         if orch is None or getattr(orch, "_pending_confirmation", None) is None:
             return
-        import threading
 
         def _run_confirm():
             try:
                 mark.working("energetic")
-                result = orch.process_request(
-                    "",
-                    on_output=lambda _line: None,
-                    on_done=lambda _exit_code: None,
-                )
-                response = (result or {}).get("response", "")
-                _bridge.reply.emit(response)
+                strategy_value, display_text = _run_and_classify(orch, "")
+                _bridge.result_ready.emit(strategy_value, display_text)
             except Exception as exc:
-                _bridge.reply.emit(f"Something went wrong: {exc}")
+                _bridge.result_ready.emit(
+                    DisplayStrategy.ERROR.value, f"Something went wrong: {exc}",
+                )
             finally:
                 _bridge.done.emit()
 
         threading.Thread(target=_run_confirm, daemon=True, name="toki-permission-confirm").start()
 
     _bridge.permission_confirm.connect(_on_permission_confirm)
+
+    # ── dictation ("start listening") stop button ───────────────────────────
+    # AppController.start_dictation()/stop_dictation() run on the same
+    # background dispatch thread as every other app_control-kind intent
+    # (see _run() below) -- there's no separate signal fired the moment a
+    # session actually starts/stops, so _dispatch_text's finally-block just
+    # checks orch.app_controller._active_dictation right after each turn
+    # and emits _bridge.dictation_active accordingly. Good enough here
+    # specifically because dictation sessions only ever start/stop as the
+    # direct result of a START_LISTENING/STOP_LISTENING turn -- there's no
+    # other code path that could change _active_dictation between one
+    # turn's dispatch and the next.
+    def _on_dictation_stop_clicked() -> None:
+        if orch is None:
+            return
+
+        def _run_stop():
+            try:
+                result = orch.app_controller.stop_dictation()
+                # stop_dictation() isn't a process_request() turn -- it's
+                # a direct app_controller call with a plain string result
+                # -- so it doesn't go through classify_display(). It's
+                # unambiguously an action (stop the session), not
+                # information to read: DONE.
+                _bridge.result_ready.emit(DisplayStrategy.DONE.value, result)
+            except Exception as exc:
+                _bridge.result_ready.emit(
+                    DisplayStrategy.ERROR.value,
+                    f"Something went wrong stopping dictation: {exc}",
+                )
+            finally:
+                _bridge.dictation_active.emit(False)
+
+        threading.Thread(target=_run_stop, daemon=True, name="toki-dictation-stop").start()
+
+    _bridge.dictation_stop_clicked.connect(_on_dictation_stop_clicked)
 
     # ── voice pipeline ───────────────────────────────────────────────────────
     pipeline = HotkeyVoicePipeline()
@@ -144,52 +240,56 @@ def main() -> None:
 
         if orch is None:
             print(f"[TOKI] (no orchestrator) → {text}")
-            mark.show_reply("(orchestrator not available)")
-            QTimer.singleShot(800, mark.idle)
+            # Genuinely an error state (nothing can be dispatched at
+            # all), so this goes through the same result_ready/"engaged"
+            # path as any other ERROR turn -- consistent persistent
+            # card + click-elsewhere-or-Ctrl+K dismissal -- rather than
+            # the old transient show_reply() + a hardcoded 800ms timer
+            # that didn't sync with anything else in this file anymore.
+            _bridge.result_ready.emit(
+                DisplayStrategy.ERROR.value, "TOKI's orchestrator isn't available right now.",
+            )
+            _bridge.done.emit()
             return
 
         # Run orchestrator in a background thread so Qt stays responsive.
         # process_request is synchronous and can take several seconds
         # (Ollama + PowerShell round-trips).
-        import threading
-
         def _run():
             try:
-                # process_request()'s real signature (orchestrator.py) is
-                # (user_prompt, on_output, on_done, on_thinking_token=None,
-                # on_generate_token=None, on_generate_done=None) -- on_output
-                # streams live PowerShell text, on_done(int) is an exit
-                # code, NOT a completion signal carrying the result. The
-                # actual per-turn result dict ({"response": ..., "kind": ...,
-                # ...}) comes back as process_request's own return value, the
-                # same way app.py's Worker.run() consumes it. There's no chat
-                # UI here to stream tokens into, so on_output/on_done are
-                # both no-ops -- but they must still be passed as on_output=/
-                # on_done= (positional-or-keyword), matching the real
-                # parameter names, or this raises TypeError on every
-                # command and gets silently swallowed by the except below.
-                result = orch.process_request(
-                    text,
-                    on_output=lambda _line: None,
-                    on_done=lambda _exit_code: None,
-                )
-                response = (result or {}).get("response", "")
-                # Reply appears as floating text next to the mark (fades
-                # after 3s) rather than only printing -- this IS the reply
-                # surface now that there's no chat window. Emitted via
-                # _bridge.reply (a real Qt signal) rather than
+                # See _run_and_classify()'s own docstring above for why
+                # this isn't just a bare process_request() call anymore:
+                # on_output/on_done used to be no-ops here, which meant
+                # every powershell-kind INFO command (LIST_FILES,
+                # DISK_USAGE, READ_FILE, ...) silently discarded its real
+                # output and only ever showed the generic "Done."
+                # placeholder. _run_and_classify() collects that output
+                # and (only for kind=="powershell") waits for the async
+                # on_done before deciding what to show.
+                strategy_value, display_text = _run_and_classify(orch, text)
+                # Reply appears next to the mark -- a quick fading note
+                # for "done", a persistent island card for "info"/"error"
+                # (see display_strategy.py / DesktopMark.show_result()).
+                # Emitted via a real Qt signal rather than
                 # QTimer.singleShot, because this runs on a background
                 # thread -- singleShot scheduled from a non-Qt thread is
                 # not guaranteed to fire (confirmed directly: it silently
                 # never did in testing), whereas Qt signals are safe to
                 # emit cross-thread by design.
-                _bridge.reply.emit(response)
+                _bridge.result_ready.emit(strategy_value, display_text)
             except Exception as exc:
                 print(f"[TOKI] Dispatch error: {exc}")
-                _bridge.reply.emit(f"Something went wrong: {exc}")
+                _bridge.result_ready.emit(
+                    DisplayStrategy.ERROR.value, f"Something went wrong: {exc}",
+                )
             finally:
                 # Return to idle on the Qt thread
                 _bridge.done.emit()
+                # See the comment on _on_dictation_stop_clicked above for
+                # why a plain post-turn check is enough here.
+                if orch is not None:
+                    is_active = getattr(orch.app_controller, "_active_dictation", None) is not None
+                    _bridge.dictation_active.emit(is_active)
 
         t = threading.Thread(target=_run, daemon=True, name="toki-dispatch")
         t.start()

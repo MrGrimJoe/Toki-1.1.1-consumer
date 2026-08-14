@@ -81,6 +81,28 @@ INTENTS_APP_CONTROL: Dict[str, Dict[str, Any]] = {
         "slots": ["macro_name"],
         "reversible": False,
     },
+    "START_LISTENING": {
+        # target_description is OPTIONAL here (unlike TYPE_INTO_ELEMENT's
+        # required one) -- see app_control.py's start_dictation() docstring
+        # for the "already-focused text box needs no target at all, and a
+        # genuinely ambiguous screen falls back to a one-time click instead
+        # of asking a normal follow-up question" resolution it does when
+        # this comes back empty. extractor.py's slot-miss handling for an
+        # OPTIONAL slot is "pass empty string", never a forced follow-up
+        # question -- exactly the behavior wanted here.
+        "description": "Start continuous dictation: keep listening and typing everything said into a target field until told to stop",
+        "kind": "app_control",
+        "action": "start_dictation",
+        "slots": ["target_description"],
+        "reversible": False,
+    },
+    "STOP_LISTENING": {
+        "description": "Stop the current continuous dictation session",
+        "kind": "app_control",
+        "action": "stop_dictation",
+        "slots": [],
+        "reversible": False,
+    },
 }
 
 INTENTS_APP_CONTROL_NAMES = list(INTENTS_APP_CONTROL.keys())

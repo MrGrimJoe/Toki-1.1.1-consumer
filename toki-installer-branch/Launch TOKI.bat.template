@@ -1,0 +1,19 @@
+@echo off
+REM Launch TOKI.bat -- generated install artifact, do not edit by hand.
+REM Runs main.py through the isolated embedded Python 3.12 runtime that
+REM setup_runtime.ps1 built at install time, so this never touches any
+REM other Python on this machine.
+
+set "TOKI_DIR=%~dp0"
+set "PYTHONW=%TOKI_DIR%runtime\python312\pythonw.exe"
+
+if not exist "%PYTHONW%" (
+    echo TOKI's runtime wasn't set up correctly.
+    echo Expected to find: %PYTHONW%
+    echo Try re-running the installer, or run installer\setup_runtime.ps1 manually.
+    pause
+    exit /b 1
+)
+
+cd /d "%TOKI_DIR%"
+start "" "%PYTHONW%" "%TOKI_DIR%main.py"

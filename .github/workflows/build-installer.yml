@@ -1,0 +1,77 @@
+name: Build TOKI Installer
+
+# Builds toki-installer-branch/installer.iss into TokiInstaller.exe on a
+# Windows runner (Inno Setup is Windows-only). Doesn't need `main` checked
+# out -- the installer itself downloads app source from `main` at install
+# time, same as a local build per BUILD_INSTRUCTIONS.md.
+
+on:
+  push:
+    branches: [installer]
+    paths:
+      - "toki-installer-branch/**"
+      - ".github/workflows/build-installer.yml"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Also attach the built installer to a GitHub Release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout installer branch
+        uses: actions/checkout@v4
+        with:
+          ref: installer
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Read MyAppVersion from installer.iss
+        id: ver
+        shell: pwsh
+        run: |
+          $content = Get-Content "toki-installer-branch\installer.iss" -Raw
+          if ($content -match '#define MyAppVersion "([^"]+)"') {
+            $version = $matches[1]
+          } else {
+            $version = "unknown"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Compile installer.iss
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "toki-installer-branch\installer.iss"
+
+      - name: Verify output exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "toki-installer-branch\dist\TokiInstaller.exe")) {
+            Write-Error "TokiInstaller.exe was not produced -- check the ISCC log above."
+            exit 1
+          }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TokiInstaller-${{ steps.ver.outputs.version }}
+          path: toki-installer-branch\dist\TokiInstaller.exe
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: TOKI v${{ steps.ver.outputs.version }}
+          files: toki-installer-branch\dist\TokiInstaller.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

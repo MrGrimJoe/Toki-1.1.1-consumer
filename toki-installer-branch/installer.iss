@@ -318,6 +318,7 @@ var
   ResultCode: Integer;
   IncludeVoiceStr: String;
   PSCommand: String;
+  AppDir: String;
 begin
   if CurStep = ssPostInstall then begin
     if not DownloadTokiSource then begin
@@ -337,9 +338,23 @@ begin
       'Setting up TOKI''s Python runtime -- this needs an internet ' +
       'connection and can take several minutes...';
 
+    // {app} is embedded below inside DOUBLE quotes directly on the raw
+    // process command line (unlike DownloadTokiSource's single-quoted
+    // use inside a -Command string) -- Windows' argument parser treats a
+    // backslash immediately before a closing double-quote as an escaped
+    // quote, not a path separator. A drive-root install (e.g. the user
+    // picks "D:\" itself, not "D:\TOKI") makes {app} end in "\", which
+    // breaks the -InstallDir "..." argument's quoting entirely and makes
+    // powershell.exe fail to parse its own arguments before the script's
+    // first line -- and therefore before install_log.txt is ever
+    // created, which is why that failure mode shows no log at all.
+    AppDir := ExpandConstant('{app}');
+    if (Length(AppDir) > 0) and (AppDir[Length(AppDir)] = '\') then
+      Delete(AppDir, Length(AppDir), 1);
+
     PSCommand :=
       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup_runtime.ps1') +
-      '" -InstallDir "' + ExpandConstant('{app}') + '" -IncludeVoice ' + IncludeVoiceStr;
+      '" -InstallDir "' + AppDir + '" -IncludeVoice ' + IncludeVoiceStr;
 
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
                  PSCommand, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then

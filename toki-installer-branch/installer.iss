@@ -129,7 +129,7 @@ var
   DrivesPage: TInputOptionWizardPage;
   FolderPage: TInputDirWizardPage;
   OllamaPage: TInputOptionWizardPage;
-  DriveLetterAt: array[0..25] of Char;
+  DriveLetterAt: array[0..25] of String;
   DriveCount: Integer;
 
 // All three custom pages below use Inno's own documented high-level page
@@ -139,7 +139,8 @@ var
 
 procedure InitializeWizard;
 var
-  Letter: Char;
+  Letter: String;
+  LetterCode: Integer;
   Drive: String;
   i: Integer;
 begin
@@ -152,7 +153,12 @@ begin
     False, False);   // Exclusive=False -> checkboxes, not radio buttons
 
   DriveCount := 0;
-  for Letter := 'C' to 'Z' do begin
+  // Pascal Script has no true Char type distinct from a 1-char String --
+  // 'C' is always a String literal here, so `for Letter := 'C' to 'Z'`
+  // (Letter: Char) is a type mismatch. Iterate the ordinal range instead
+  // and convert with Chr(), the standard Inno Setup workaround.
+  for LetterCode := Ord('C') to Ord('Z') do begin
+    Letter := Chr(LetterCode);
     Drive := Letter + ':\';
     if DirExists(Drive) then begin
       DrivesPage.Add(Drive + '  drive');

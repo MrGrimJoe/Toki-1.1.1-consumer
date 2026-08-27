@@ -28,8 +28,19 @@ USAGE
 Raises one of:
     InvalidUrlError      -- what was passed isn't an http(s) link
     ImportError           -- yt-dlp isn't installed
-    FfmpegNotFoundError   -- ffmpeg isn't installed/on PATH
     (a yt-dlp-raised exception, e.g. "Video unavailable")
+
+ffmpeg (missing binary) is only a HARD requirement for audio_only
+downloads (extracting/re-encoding to mp3 needs it, no fallback exists).
+For a normal video download, ffmpeg is used OPPORTUNISTICALLY to merge
+the best separately-served video+audio streams -- but per yt-dlp's own
+documented behavior, a plain "best" pre-muxed single-file format almost
+always exists too and needs no merging at all. See FfmpegNotFoundError's
+own docstring below for why this used to be a hard block for video too,
+and wasn't supposed to be. `ffmpeg_available()` lets a caller (see
+apis.py's VideoDownloadAPI) tell the user their download landed at a
+possibly-lower resolution because ffmpeg wasn't there to merge a higher
+one, without that being a failure.
 
 apis.py's VideoDownloadAPI is responsible for catching these and turning
 them into the short, friendly sentences the rest of TOKI's API layer
@@ -61,8 +72,41 @@ class InvalidUrlError(ValueError):
 
 
 class FfmpegNotFoundError(RuntimeError):
-    """Raised when ffmpeg is required (audio-only extraction, or merging
-    separately-served video+audio streams) but isn't on PATH."""
+    """Raised ONLY when ffmpeg is genuinely required with no fallback --
+    that's audio_only extraction specifically (re-encoding to mp3 has no
+    ffmpeg-free path in yt-dlp).
+
+    BETA 0.3.67 fix: this used to ALSO be raised unconditionally for
+    plain (non-audio) video downloads, on the reasoning in the comment
+    that used to sit on _require_ffmpeg()'s only call site -- that
+    merging separately-served best-video + best-audio is "the common
+    case for a real 'best quality' download." That reasoning was true
+    but beside the point: yt-dlp does not actually need ffmpeg to
+    produce a video file at all. It has a documented, built-in fallback
+    for exactly this situation -- when ffmpeg isn't available and no
+    format is forced, it downloads a single already-muxed "best" stream
+    (usually capped around 720p on sites like YouTube that split higher
+    resolutions into separate video/audio) instead of merging. TOKI was
+    never reaching that fallback because it forced an EXPLICIT
+    "bestvideo*+bestaudio/best" format string -- and yt-dlp does NOT
+    reliably fall through the "/best" alternative when the first
+    alternative needs a merge it can't perform; several yt-dlp versions
+    raise a hard DownloadError instead ("You have requested merging of
+    multiple formats but ffmpeg is not installed"), which is exactly the
+    reported symptom: TOKI "keeps saying ffmpeg isn't there" for a
+    request that didn't actually need it. Fixed by requesting "best"
+    directly (no merge attempted at all) when ffmpeg isn't on PATH,
+    instead of asking for a merge and then either failing outright or
+    depending on cross-version yt-dlp fallback behavior.
+    """
+
+
+def ffmpeg_available() -> bool:
+    """True if ffmpeg is on PATH. Exposed so a caller (VideoDownloadAPI)
+    can add a "this may be lower quality than usual" caveat to an
+    otherwise-successful video download, without download_video() itself
+    needing to change its return type to communicate that."""
+    return shutil.which("ffmpeg") is not None
 
 
 def _default_destination() -> Path:
@@ -75,9 +119,9 @@ def _default_destination() -> Path:
 
 
 def _require_ffmpeg() -> None:
-    if shutil.which("ffmpeg") is None:
+    if not ffmpeg_available():
         raise FfmpegNotFoundError(
-            "Downloading video needs ffmpeg, which isn't installed on "
+            "Extracting audio needs ffmpeg, which isn't installed on "
             "this machine (or isn't on PATH). Install it from ffmpeg.org, "
             "then try again."
         )
@@ -99,7 +143,8 @@ def download_video(
     absolute path and only ever picks its OWN default from the sandbox).
 
     audio_only: extracts and saves just the audio track as an mp3,
-    instead of the full video.
+    instead of the full video. Genuinely requires ffmpeg -- see
+    FfmpegNotFoundError's docstring for why video downloads don't.
 
     overwrite: if False (default), yt-dlp will not clobber a file that
     already has the exact same title+id -- same "never silently
@@ -116,12 +161,6 @@ def download_video(
             "Downloading video needs the 'yt-dlp' package, which isn't "
             "installed. Add 'yt-dlp' to requirements.txt to enable this."
         )
-
-    # ffmpeg is needed both for audio-only extraction AND for merging a
-    # separately-served best-video + best-audio pair, which is the common
-    # case for a real "best quality" download on most sites today -- so
-    # it's required either way, not just for the audio_only branch.
-    _require_ffmpeg()
 
     dest_dir = Path(destination) if destination else _default_destination()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -140,15 +179,25 @@ def download_video(
     }
 
     if audio_only:
+        # No fallback exists for this one -- mp3 re-encoding is an
+        # ffmpeg postprocessing step, full stop.
+        _require_ffmpeg()
         ydl_opts["format"] = "bestaudio/best"
         ydl_opts["postprocessors"] = [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "192",
         }]
-    else:
+    elif ffmpeg_available():
         ydl_opts["format"] = "bestvideo*+bestaudio/best"
         ydl_opts["merge_output_format"] = "mp4"
+    else:
+        # No ffmpeg, no merge attempted at all -- request the single
+        # best already-muxed stream directly. See FfmpegNotFoundError's
+        # docstring for why an explicit "bestvideo+bestaudio/best"
+        # string can't be trusted to gracefully fall through to "best"
+        # on its own across yt-dlp versions.
+        ydl_opts["format"] = "best"
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -161,4 +210,7 @@ def download_video(
     return str(out_path)
 
 
-__all__ = ["download_video", "InvalidUrlError", "FfmpegNotFoundError", "DOWNLOAD_SUBFOLDER"]
+__all__ = [
+    "download_video", "InvalidUrlError", "FfmpegNotFoundError",
+    "DOWNLOAD_SUBFOLDER", "ffmpeg_available",
+]

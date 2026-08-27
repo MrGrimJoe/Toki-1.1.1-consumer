@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import os
 from pathlib import Path
 from typing import List, Tuple
 
@@ -113,6 +114,23 @@ def _run_and_classify(orch, text: str) -> Tuple[str, str]:
     if (result or {}).get("kind") == "powershell":
         completed = done_event.wait(timeout=_POWERSHELL_RESULT_TIMEOUT_S)
         timed_out = not completed
+
+    # TAKE_SCREENSHOT's own PowerShell (intents_extended.py) ends with
+    # `Write-Output $path`, so the saved file's real path streams through
+    # _on_output above as its own line -- but nothing was ever capturing
+    # it. That leaves orch._last_touched empty after a screenshot, so a
+    # follow-up like "put it in <folder>" (resolve_move_or_copy_with_
+    # context, extractor.py) has no "it" to resolve at all and falls back
+    # to asking. This is a widget-layer fix, not a routing one: it only
+    # ever reads output that was already going to be discarded, and only
+    # for the one intent that's known to end with exactly its own saved
+    # path -- it can't affect anything else's slot resolution.
+    if not timed_out and (result or {}).get("intent") == "TAKE_SCREENSHOT":
+        for line in reversed(output_lines):
+            candidate = line.strip()
+            if candidate and os.path.isabs(candidate) and os.path.exists(candidate):
+                orch._last_touched = {"path": candidate}
+                break
 
     strategy, display_text = classify_display(
         result,

@@ -30,6 +30,13 @@ service, no account.
   the mark to type instead.
 - **Macros** — record a sequence of actions once and replay it later.
 - **Plugins** — extend TOKI with your own drop-in plugins.
+- **QR codes & clipboard** — turn text (or whatever's currently on your
+  clipboard) into a QR code, scan a QR code from an image file, or save
+  your clipboard's contents straight to a file.
+- **Remembers what you were just talking about** — short follow-up
+  requests that don't fully repeat themselves are understood using the
+  topic of your last few exchanges, not just the single message you just
+  typed.
 
 Most requests are matched instantly against TOKI's own built-in command
 set and run with zero delay. If a request doesn't match anything TOKI
@@ -61,6 +68,17 @@ touches System32, Program Files, or anything outside that sandbox.
 Anything TOKI isn't confident is safe gets a one-line confirmation
 question instead of running automatically, and there's always a visible
 Stop button to cancel whatever's in progress.
+
+## What's new in this update
+
+- Added QR code generation/scanning and save-clipboard-to-file.
+- Added short-term topic memory, so quick follow-up requests are
+  understood without needing to repeat context.
+- Windows command matching is noticeably more reliable — a class of
+  built-in commands that could previously only be triggered by an exact
+  phrase now also match through TOKI's normal fuzzy matching.
+- Clearer error message when converting to PDF on a machine that has
+  pandoc but not a LaTeX toolchain (MiKTeX) installed.
 
 ## Requirements
 

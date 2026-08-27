@@ -63,6 +63,40 @@ class PandocNotFoundError(RuntimeError):
     pass
 
 
+class PdfEngineNotFoundError(RuntimeError):
+    pass
+
+
+# Substrings pandoc's own stderr uses when it can't produce a PDF because
+# the LaTeX toolchain it shells out to for that specific format (pdflatex
+# by default) is missing or incomplete -- found live this session:
+# document_backend.convert() with target_ext="pdf" on a machine that has
+# pandoc but no LaTeX distribution raised a raw multi-line LaTeX error
+# ("! LaTeX Error: File `lmodern.sty' not found.", stuck at an
+# interactive "Enter file name:" prompt) straight through to the chat
+# reply via apis.py's FileConvertAPI.convert_selected() generic
+# `except Exception as e: return f"...: {e}"` -- unlike every other
+# "clear, actionable message" failure path this module and its siblings
+# already follow (_require_pandoc above, text_backend's missing-yaml/
+# toml messages). PDF is pandoc's one output format with an extra heavy
+# runtime dependency beyond the pandoc binary itself (a whole LaTeX
+# install, e.g. MiKTeX on Windows -- hundreds of MB, not something the
+# bundled-pandoc.exe installer plan above covers), so it gets its own
+# specific, friendly error instead of the generic pandoc-failed one.
+# Deliberately narrow (a short substring list, checked only when
+# target_ext == "pdf") rather than trying to pattern-match pandoc
+# failures in general -- a non-PDF conversion failure, or a PDF failure
+# for some unrelated reason, still surfaces via the existing generic
+# RuntimeError below, unchanged.
+_MISSING_PDF_ENGINE_MARKERS = (
+    "pdflatex not found",
+    "pdflatex.exe\" not found",
+    "latex error",
+    "xelatex not found",
+    "lualatex not found",
+)
+
+
 def _bundled_pandoc_path() -> Path:
     name = "pandoc.exe" if platform.system() == "Windows" else "pandoc"
     return BUNDLED_DIR / name
@@ -108,6 +142,16 @@ def convert(source_path: str, target_ext: str, overwrite: bool = False) -> str:
         timeout=120,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"pandoc conversion failed: {result.stderr.strip()}")
+        stderr = result.stderr.strip()
+        if target_ext == "pdf" and any(
+            marker in stderr.lower() for marker in _MISSING_PDF_ENGINE_MARKERS
+        ):
+            raise PdfEngineNotFoundError(
+                "Converting to PDF needs a LaTeX toolchain installed "
+                "alongside pandoc (e.g. MiKTeX on Windows), which isn't "
+                "set up on this machine. Install MiKTeX from miktex.org, "
+                "then try again."
+            )
+        raise RuntimeError(f"pandoc conversion failed: {stderr}")
 
     return str(out_path)

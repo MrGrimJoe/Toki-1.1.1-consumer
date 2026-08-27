@@ -17,9 +17,9 @@ import subprocess
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
-# Directory this file lives in -- the installed app root. The sandbox
-# config (if the installer wrote one) lives alongside it at
-# config/sandbox_config.json, never bundled with the app itself.
+# Consumer-edition customization: sandbox roots can be overridden by an
+# installer-written config file, instead of the hardcoded D:\ + Desktop
+# default the testing edition uses. See _load_configured_roots() below.
 _APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 _SANDBOX_CONFIG_PATH = os.path.join(_APP_ROOT, "config", "sandbox_config.json")
 
@@ -481,14 +481,32 @@ _GENERATE_FUNCTION_RE = re.compile(r"\bfunction\b", re.IGNORECASE)
 #    purpose elsewhere in this file. Any of those, with no creation verb
 #    present, means this isn't a generation request -- fall through to
 #    normal routing instead.
+#
+# BUGFIX (this session, found live testing "take a screenshot, now put it
+# in function"): put/place/drop weren't on this leading-verb list at all
+# -- only move/copy were -- so "put it in function" fell all the way
+# through to `return True` at the bottom of looks_like_function_creation()
+# below and got routed straight to GENERATE_FILE, asking "what should I
+# name this function?" for a plain MOVE_ITEM request that never meant
+# "function" as a programming construct at all. Same class of bug as the
+# move/copy case this list already existed to fix; put/place/drop are
+# exactly the verbs resolve_move_or_copy_with_context() above now
+# recognizes for that same "put X in Y" phrasing, so they need the same
+# exemption here.
 _FUNCTION_CREATION_VERB_RE = re.compile(
     r"\b(write|create|make|build|generate|code)\b", re.IGNORECASE,
 )
 _FUNCTION_AS_EXISTING_FILE_RE = re.compile(
     r"\bfunction\.[a-z0-9]{1,6}\b|"           # function.py, function.txt, ...
     r"['\"]function['\"]|"                    # a quoted literal name
-    r"^(?:please\s+)?(?:delete|remove|erase|read|open|view|show|display|"
-    r"list|find|search|rename|move|copy)\b.*\bfunction\b",
+    # Leading connector words ("now put it in function", "then move it to
+    # function") are common in a multi-turn conversation -- a follow-up
+    # command very often opens with one -- so they're skipped before the
+    # actual leading verb, same reasoning as _NAME_TRIGGERS' own filler
+    # handling elsewhere in this file, not just a bare `^verb` match.
+    r"^(?:please\s+)?(?:now\s+|then\s+|next\s+|so\s+|and\s+|ok(?:ay)?,?\s+)*"
+    r"(?:delete|remove|erase|read|open|view|show|display|"
+    r"list|find|search|rename|move|copy|put|place|drop)\b.*\bfunction\b",
     re.IGNORECASE,
 )
 
@@ -531,6 +549,36 @@ _FUNCTION_AS_NAME_OF_OTHER_TARGET_RE = re.compile(
 )
 
 
+# ── "put/place/drop X in Y" contextual move/copy pre-check ─────────────────
+#
+# Same reasoning and same "closed-vocabulary heuristics have a real
+# ceiling" situation as looks_like_function_creation()/looks_like_start_
+# listening() above -- confirmed live: the graph's own Tier A vocabulary
+# for MOVE_ITEM/COPY_ITEM was built entirely from "move X to Y"/"copy X
+# to Y" phrasings (that DOES route correctly through the graph already),
+# but has zero coverage for "put"/"place"/"drop", so "put it in function"
+# scored below CONFIDENCE_THRESHOLD and fell all the way through to
+# SEARCH_WEB, never even reaching extract_slots(). This bypasses
+# classification entirely for that one specific shape, the same way the
+# other pre-checks above do for theirs.
+_MOVE_COPY_PHRASING_RE = re.compile(
+    r"\b(?:put|place|drop|move|copy)\s+.+?\b(?:in(?:to)?|to)\s+.+",
+    re.IGNORECASE,
+)
+
+
+def looks_like_move_or_copy_phrasing(text: str) -> Optional[str]:
+    """Returns "COPY_ITEM"/"MOVE_ITEM" if `text` has the "put/place/drop/
+    move/copy X in/to Y" shape, else None. "copy" as the leading verb
+    means COPY_ITEM; put/place/drop/move all mean MOVE_ITEM (matching
+    resolve_move_or_copy_with_context()'s own verb -> intent mapping in
+    extractor.py -- keep the two in sync if either changes)."""
+    stripped = text.strip()
+    if not _MOVE_COPY_PHRASING_RE.search(stripped):
+        return None
+    return "COPY_ITEM" if re.match(r"^(?:please\s+)?copy\b", stripped, re.IGNORECASE) else "MOVE_ITEM"
+
+
 def looks_like_function_creation(text: str) -> bool:
     stripped = text.strip()
     if not _GENERATE_FUNCTION_RE.search(stripped):
@@ -561,26 +609,48 @@ def looks_like_function_creation(text: str) -> bool:
 # looks_like_start_listening() both return False, so it only ever fires on
 # the true leftover case -- it can never steal a phrasing that already had
 # a real answer.
-# BETA 0.3.49: widened to also catch a bare "record ..." with no leading
-# "start"/"begin" at all (e.g. "record my screen"). Confirmed live: this
-# used to require "start"/"begin" literally in the text, so a bare
-# imperative fell through to a raw miss (silent web search) instead of
-# reaching this "ask once" fallback -- the exact failure mode this
-# function exists to prevent. Safe to widen: this check only ever runs
-# (see orchestrator.py's call site) AFTER looks_like_start_seeing() and
-# looks_like_start_listening() have both already returned False, so by
-# the time bare "record"/"recording" reaches here, any phrasing with a
-# real do/click/type/clicks/say object has already been resolved
-# deterministically above -- nothing this widening newly matches was ever
-# a genuinely resolvable case.
-_AMBIGUOUS_START_RECORDING_RE = re.compile(
-    r"\b(start|begin)\b.*\brecording\b|\brecord(ing)?\b",
+# BETA 0.3.66 (widget-context merge session): confirmed live, real
+# regression from the 0.3.49 widening below -- dropping the hard "start"/
+# "begin" requirement so bare imperatives like "record my screen" would
+# be caught also means ANY sentence containing the word "record"/
+# "recording" as a plain NOUN, anywhere in it, now wrongly triggers this
+# ambiguous-recording fallback -- confirmed directly: "add a dns record"
+# (a real 3-variable WCL command, Add-DnsServerResourceRecord) never
+# reaches the command resolver at all, it gets swallowed here and asked
+# "recording clicks... or recording/dictating what you say?" instead.
+# Same failure mode for "check the record", "for the record", "keep a
+# record of this", etc. -- none of these are a recording request.
+#
+# Fix: bare "record"/"recording" (no "start"/"begin") only counts when it
+# is the message's own leading action word -- i.e. the first word after
+# stripping a small set of common filler/politeness openers ("please",
+# "can/could/would you", "hey", "toki", "just", "now"). Every phrasing
+# this fallback was actually designed to catch ("record my screen",
+# "record everything", "record what i say") has "record"/"recording" as
+# that leading word; every false-positive case found has it appearing
+# later, as the object of a different verb. The explicit "start/begin
+# ... recording" phrase check is untouched -- that one was never the
+# source of the bug, it's inherently well-anchored by requiring both
+# words.
+_AMBIGUOUS_START_RECORDING_LEADING_RE = re.compile(
+    r"^(please|can|could|would|hey|toki|just|now|you)\b\s*",
     re.IGNORECASE,
 )
 
 
 def looks_like_ambiguous_start_recording(text: str) -> bool:
-    return bool(_AMBIGUOUS_START_RECORDING_RE.search(text.strip()))
+    stripped = text.strip()
+    if re.search(r"\b(start|begin)\b.*\brecording\b", stripped, re.IGNORECASE):
+        return True
+    # Peel off leading filler words one at a time (there's rarely more
+    # than one, but "could you please record..." is a real phrasing).
+    remainder = stripped
+    for _ in range(3):
+        new_remainder = _AMBIGUOUS_START_RECORDING_LEADING_RE.sub("", remainder, count=1)
+        if new_remainder == remainder:
+            break
+        remainder = new_remainder
+    return bool(re.match(r"record(ing)?\b", remainder, re.IGNORECASE))
 
 
 # Mirror of the above for "stop" -- but see orchestrator.py's actual use
@@ -893,6 +963,19 @@ _NAME_TRIGGERS = [
     r"\bcalled\s+(.+?)(?:\s+on\s+(?:my\s+)?desktop|\s+in\s+d\b|$)",
     r"\bnamed\s+(.+?)(?:\s+on\s+(?:my\s+)?desktop|\s+in\s+d\b|$)",
     r"\btitled\s+(.+?)$",
+    # "name it X" -- a genuinely common everyday phrasing ("make a qr
+    # code and name it poppers", "make a folder and name it homework")
+    # that was missing entirely: none of the three triggers above match
+    # it ("named"/"called"/"titled" all require the trigger word to
+    # come immediately before the name; "name it X" puts "it" in
+    # between). Confirmed via live stress-testing this session --
+    # _extract_name() silently returned None for this phrasing on every
+    # intent that uses it (GENERATE_QR_CODE's filename slot,
+    # SAVE_CLIPBOARD_TO_FILE, MAKE_FOLDER, MAKE_FILE, etc.), routing a
+    # perfectly clear instruction through the missing-slot ask instead
+    # of just using the name the user gave. Placed after "named" so it
+    # never intercepts "named X" (which already contains "name").
+    r"\bname\s+it\s+(.+?)(?:\s+on\s+(?:my\s+)?desktop|\s+in\s+d\b|$)",
 ]
 
 _ON_D_DRIVE_RE = re.compile(r"\bin\s+d\b|\bin\s+d:|\bin\s+d\s+drive\b", re.IGNORECASE)
@@ -909,7 +992,7 @@ def _extract_name(text: str) -> Optional[str]:
     m = _DOUBLE_QUOTED_RE.search(text)
     if m:
         return m.group(1).strip()
-    m = _QUOTED_RE.search(text)
+    m = _SINGLE_QUOTED_RE.search(text)
     if m:
         return m.group(1).strip()
     for pattern in _NAME_TRIGGERS:
@@ -1009,21 +1092,10 @@ def _extract_extensions(text: str) -> List[str]:
 
 
 def _default_root_for(text: str) -> str:
-    # Desktop is the default when nothing else is said -- resolved
-    # directly rather than assumed from roots list position, since a
-    # user-configured allow-list may not include Desktop at all or may
-    # not put it second. If "D:\" was mentioned explicitly, only honor
-    # it when D:\ is actually one of the active sandbox roots; otherwise
-    # fall back to the first configured root so an explicit mention
-    # doesn't silently escape a custom allow-list.
     roots = get_sandbox_roots()
     if _ON_D_DRIVE_RE.search(text):
-        d_drive = ntpath.normpath(r"D:\\")
-        for root in roots:
-            if ntpath.normpath(root).lower() == d_drive.lower():
-                return root
         return roots[0]
-    return get_desktop_root() if get_desktop_root() in roots else roots[0]
+    return roots[1]  # Desktop is the default when nothing else is said
 
 
 # BETA 0.3.27 fix -- confirmed live: the OLD single regex's drive-letter
@@ -1247,6 +1319,149 @@ def resolve_anaphoric_target(intent: str, last_touched: Optional[Dict[str, str]]
     return {"path": last_touched["path"]}
 
 
+# ── MOVE_ITEM/COPY_ITEM contextual resolution ("put it in <folder>") ───────
+#
+# extract_slots()'s own MOVE_ITEM/COPY_ITEM branch above only matches the
+# strict "move X to Y" / "copy X to Y" shape -- deliberately, so it never
+# has to guess. This is the fallback flagged but not built in
+# ANAPHORA_ELIGIBLE_INTENTS's own comment above: MOVE_ITEM/COPY_ITEM's
+# two-slot "X to Y" needs its own resolution, because a plain single-slot
+# anaphora fill isn't enough -- BOTH slots can be implicit at once ("put
+# it in function": "it" is the source, "function" is a bare folder NAME,
+# not a path).
+#
+# Only ever consulted by orchestrator.py AFTER extract_slots() has
+# already returned None for the exact same text -- same safety posture as
+# resolve_anaphoric_target(): this never overrides a real match, it only
+# fires when there was nothing to work with otherwise. A miss anywhere in
+# here (source can't be resolved, destination doesn't look safely nameable)
+# returns None exactly like a normal miss, and the caller falls back to
+# the ordinary missing-slot question.
+_MOVE_COPY_CONTEXT_RE = re.compile(
+    r"\b(?:put|place|drop|move|copy)\s+"
+    r"(it|that|this|(?:the\s+)?[\w .'\-]+?)?\s*"
+    r"(?:in(?:to)?|to)\s+"
+    r"(?:the\s+)?([\w .'\-]+?)"
+    r"(?:\s+(?:folder|directory|dir))?\s*$",
+    re.IGNORECASE,
+)
+
+_BARE_PRONOUNS = frozenset({"it", "that", "this", ""})
+
+
+def resolve_move_or_copy_with_context(
+    intent: str,
+    user_text: str,
+    last_touched: Optional[Dict[str, str]],
+    recent_folder_names: Optional[Dict[str, str]] = None,
+) -> Optional[Dict[str, str]]:
+    """
+    Fallback slot resolution for MOVE_ITEM/COPY_ITEM when extract_slots()
+    found nothing (see that function's own strict "move X to Y" match).
+    Handles the everyday shape extract_slots() deliberately doesn't try to
+    guess at: "put it in <name>" / "move that to the <name> folder".
+
+    - The source ("it"/"that"/omitted) resolves against `last_touched`
+      (orchestrator.py's `_last_touched` -- the path TOKI itself most
+      recently created/produced this session), same source of truth as
+      resolve_anaphoric_target() above. A named source still works too
+      ("put screenshot.png in function").
+    - The destination is checked against `recent_folder_names` first (a
+      small name -> path map orchestrator.py keeps of folders TOKI has
+      recently made or moved things into this session -- see its own
+      docstring) so a folder mentioned earlier in the conversation is
+      reused rather than a same-named duplicate getting created. If it's
+      not a known folder, a bare short name (no path separators, no file
+      extension) resolves to a NEW folder under the same default root
+      MAKE_FOLDER itself would use -- and that folder is created right
+      here in Python (not left to the PowerShell template) so
+      "put it in function" unambiguously means "make a folder called
+      function if one doesn't already exist, then put it there", never
+      Move-Item's own literal behavior of treating a non-existent
+      destination as a rename target (which is exactly the "what do you
+      want to name this" confusion this was built to stop). A destination
+      that already looks like a real path, or already has a file
+      extension (a genuine rename-via-move target, e.g. "move it to
+      report_final.pdf"), is left to resolve_path() unchanged and is
+      NEVER auto-created -- only a plain bare name is treated as a
+      folder.
+    """
+    if intent not in ("MOVE_ITEM", "COPY_ITEM"):
+        return None
+
+    m = _MOVE_COPY_CONTEXT_RE.search(user_text.strip())
+    if not m:
+        return None
+
+    src_raw = (m.group(1) or "").strip().strip("'\"")
+    src_raw = re.sub(r"^(?:the|my)\s+", "", src_raw, flags=re.IGNORECASE).strip()
+    dest_raw = m.group(2).strip().strip("'\"")
+    if not dest_raw:
+        return None
+
+    # ── source ──────────────────────────────────────────────────────────
+    if src_raw.lower() in _BARE_PRONOUNS:
+        if not last_touched or not last_touched.get("path"):
+            return None
+        src_path = last_touched["path"]
+    else:
+        src_path = resolve_path(src_raw, _default_root_for(user_text))
+        if not src_path:
+            return None
+
+    # ── destination ─────────────────────────────────────────────────────
+    dest_key = dest_raw.strip().lower()
+    dest_path = recent_folder_names.get(dest_key) if recent_folder_names else None
+
+    if dest_path is None:
+        looks_like_path = (
+            ntpath.isabs(dest_raw) or bool(re.match(r"^[A-Za-z]:\\", dest_raw))
+            or "\\" in dest_raw or "/" in dest_raw
+        )
+        # A bare name with a file-style extension ("report.pdf") is a
+        # genuinely ambiguous case (rename-via-move) this fallback
+        # deliberately does NOT guess at -- only an extension-less short
+        # name is ever treated as "a folder".
+        has_extension = bool(re.search(r"\.[A-Za-z0-9]{1,5}$", dest_raw))
+        if not looks_like_path and not has_extension and len(dest_raw.split()) <= 4:
+            dest_path = resolve_path(dest_raw, _default_root_for(user_text))
+            if dest_path:
+                try:
+                    os.makedirs(dest_path, exist_ok=True)
+                except Exception:
+                    return None
+        else:
+            dest_path = resolve_path(dest_raw, _default_root_for(user_text))
+
+    if not dest_path or not src_path:
+        return None
+
+    if recent_folder_names is not None:
+        # BETA 0.3.66 (widget-context merge session): confirmed live,
+        # the same LRU-cache correctness bug just fixed in
+        # orchestrator.py's own copy of this pattern (_remember_touched)
+        # -- see that fix's comment for the full repro. The comment this
+        # replaces assumed "dict insertion order = recency in Python
+        # 3.7+", which is true for NEW keys but false for an UPDATE to an
+        # EXISTING key: `d[existing_key] = value` does not move it to the
+        # end. Re-touching an already-cached folder name never promoted
+        # it, so it could still be evicted next even though it was just
+        # used. Fixed the same way: drop the key first so re-insertion
+        # always lands at the end (most-recent) position.
+        recent_folder_names.pop(dest_key, None)
+        recent_folder_names[dest_key] = dest_path
+        # Keep this to the last 3 distinct folder names mentioned this
+        # session -- deliberately small and short-lived, matching "the
+        # last few things we were just talking about", not an
+        # ever-growing whole-session map that could eventually resolve a
+        # name to a folder from an unrelated, long-forgotten part of the
+        # conversation.
+        while len(recent_folder_names) > 3:
+            recent_folder_names.pop(next(iter(recent_folder_names)))
+
+    return {"path": src_path, "dest": dest_path}
+
+
 # ── Selected-file conversion intents ────────────────────────────────────────
 #
 # "this file I'm selecting" / "this image" / "the file I dragged in" all
@@ -1283,8 +1498,34 @@ _FORMAT_WORD_RE = re.compile(
     r"\b(?:to|into|as)\s+(?:an?\s+)?(" + "|".join(sorted(_KNOWN_FORMAT_WORDS, key=len, reverse=True)) + r")\b",
     re.IGNORECASE,
 )
-# Bare ".ext" mention, e.g. "convert this to .pdf"
-_DOT_EXT_RE = re.compile(r"\.([a-zA-Z]{2,5})\b")
+# BETA 0.3.66 (widget-context merge session): confirmed live, a real and
+# fairly serious bug. This used to be `r"\.([a-zA-Z]{2,5})\b"` with NO
+# anchor to "to"/"into"/"as" at all -- just "find any dot-extension
+# anywhere in the whole message". That's fine for "convert this to .pdf"
+# (only one dot-extension present), but "convert my_notes.txt into a .md
+# file" has TWO: the SOURCE file's own ".txt" (which appears first,
+# left-to-right) and the actual target ".md". .search() returns the
+# first match, so this silently returned "txt" as the TARGET format --
+# i.e. "convert my_notes.txt into a .md file" was resolving to "convert
+# this file to its own current format", a functional no-op, while
+# completely ignoring the ".md" the user actually asked for. Confirmed
+# directly: _extract_target_format("convert my_notes.txt into a .md
+# file") returned "txt" before this fix.
+#
+# Fixed by anchoring this fallback near "to"/"into"/"as" (mirroring
+# _FORMAT_WORD_RE's own anchor) OR requiring an immediately-preceding
+# bare article ("a"/"an"), instead of matching a dot-extension anywhere
+# in the whole string. A source filename's own extension never has a
+# SPACE before its dot ("my_notes.txt" -- no "a "/"an "/"to " right
+# before ".txt"), so neither branch can mistake it for the target,
+# while both of the docstring's own examples still work: "convert this
+# to .pdf" (trigger word, no article) and "make this a .pdf" (bare
+# article, no trigger word) match the two branches respectively.
+_DOT_EXT_RE = re.compile(
+    r"\b(?:(?:to|into|as)\s+)?an?\s+\.([a-zA-Z]{2,5})\b"
+    r"|\b(?:to|into|as)\s+\.([a-zA-Z]{2,5})\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_target_format(text: str) -> Optional[str]:
@@ -1297,9 +1538,66 @@ def _extract_target_format(text: str) -> Optional[str]:
     if m:
         return _KNOWN_FORMAT_WORDS[m.group(1).lower()]
     m = _DOT_EXT_RE.search(text)
-    if m and m.group(1).lower() in _KNOWN_FORMAT_WORDS.values():
-        return m.group(1).lower()
+    if m:
+        ext = (m.group(1) or m.group(2)).lower()
+        if ext in _KNOWN_FORMAT_WORDS.values():
+            return ext
     return None
+
+
+# BETA 0.3.66 (widget-context merge session): confirmed live, a real
+# usability gap. CONVERT_SELECTED_FILE (and its RESIZE/COMPRESS/EXTRACT
+# siblings) were 100% drag-drop-only by design -- see
+# SELECTION_ELIGIBLE_INTENTS's own docstring for why selection_context.py
+# is deliberately kept separate from orchestrator._last_touched. But that
+# separation was never meant to also block the ORTHOGONAL case of an
+# EXPLICIT filename typed directly in the request -- "convert notes.txt
+# to markdown" is completely unambiguous and needs no context-store
+# lookup at all, yet FileConvertAPI.convert_selected() had no parameter
+# for a source path whatsoever, so this always fell through to "nothing
+# is selected right now" even when the user had just spelled out exactly
+# which file they meant. This pulls that explicit filename out of the
+# text; it deliberately does NOT touch the drag-drop-vs-_last_touched
+# separation above -- if no explicit filename is found, the caller still
+# falls back to selection_context exactly as before.
+# BETA 0.3.66: scoped separately from _BARE_PATH_LEADING_VERB_RE above
+# (deliberately not reusing/extending that shared one) so this fix can't
+# change behavior for DELETE_ITEM/READ_FILE/etc., which already have
+# their own well-tested bare-path guessing. "convert"/"turn"/"change"/
+# "make" are the verbs CONVERT_SELECTED_FILE's own Tier A phrasings
+# actually use.
+_CONVERT_LEADING_VERB_RE = re.compile(
+    r"^(?:please\s+)?(?:can\s+(?:you|u)\s+|could\s+you\s+)?"
+    r"(?:convert|turn|change|make)\s+(?:the\s+)?(?:file\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _extract_convert_source(text: str) -> Optional[str]:
+    """Pulls an explicit source filename out of "convert X to Y" phrasing.
+    Masks out whichever span _extract_target_format() itself matched
+    first, so a bare ".md"/".pdf" naming the TARGET is never mistaken for
+    the SOURCE file -- confirmed this collision is real without the
+    mask: "convert this into a .md file" would otherwise match ".md"
+    itself as a bare filename. Also strips a leading "convert"/"turn"/
+    "change"/"make" the same way _extract_bare_path() strips
+    "delete"/"read"/etc. for its own intents -- confirmed live this was
+    needed too: _BARE_FILENAME_RE's char class is permissive enough
+    (spaces included, for names with spaces in them) that without this,
+    "convert my_notes.txt " matched the WHOLE "convert my_notes.txt" as
+    one filename, verb included."""
+    span = None
+    m = _FORMAT_WORD_RE.search(text)
+    if m:
+        span = m.span()
+    else:
+        m2 = _DOT_EXT_RE.search(text)
+        if m2 and (m2.group(1) or m2.group(2)).lower() in _KNOWN_FORMAT_WORDS.values():
+            span = m2.span()
+    masked = text[:span[0]] + " " + text[span[1]:] if span else text
+    masked = _CONVERT_LEADING_VERB_RE.sub("", masked, count=1)
+    m3 = _BARE_FILENAME_RE.search(masked)
+    return m3.group(0).strip() if m3 else None
 
 
 _SHRINK_WORDS_RE = re.compile(r"\b(shrink|smaller|reduce|too big|too large)\b", re.IGNORECASE)
@@ -2079,7 +2377,22 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
         # returning None here (not an empty dict) routes through the normal
         # MISSING_SLOT_QUESTIONS ask-instead-of-guess path, same as
         # MAKE_FOLDER's missing name.
-        return {"target_format": fmt} if fmt else None
+        if not fmt:
+            return None
+        slots = {"target_format": fmt}
+        # BETA 0.3.66: an explicit filename in the text ("convert
+        # notes.txt to markdown") is unambiguous and needs no
+        # selection_context/drag-drop lookup at all -- see
+        # _extract_convert_source()'s own docstring above. When absent,
+        # explicit_source is simply omitted (not set to None/""), so
+        # FileConvertAPI.convert_selected() falls back to
+        # selection_context exactly as it always has.
+        source = _extract_convert_source(text)
+        if source:
+            resolved = resolve_path(source, _default_root_for(text))
+            if resolved:
+                slots["explicit_source"] = resolved
+        return slots
 
     if intent == "RESIZE_SELECTED_FILE":
         return _extract_resize_params(text)
@@ -2088,6 +2401,49 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
         return {"quality": _extract_compress_quality(text)}
 
     if intent == "EXTRACT_SELECTED_FILE":
+        return {}
+
+    if intent == "SAVE_CLIPBOARD_TO_FILE":
+        # No required slot -- "save the clipboard" / "turn this into a md
+        # file" is already a complete instruction on its own (defaults:
+        # timestamped filename, .md extension). _extract_target_format
+        # already recognizes "into a .md file"/"as markdown"/"into a text
+        # file" phrasing (same regex CONVERT_SELECTED_FILE uses), so it's
+        # reused here rather than writing a parallel extension parser.
+        ext = _extract_target_format(text) or ""
+        name = _extract_name(text) or ""
+        return {"filename": name, "extension": ext}
+
+    if intent == "GENERATE_QR_CODE":
+        # Prefer an explicit quoted string or URL in the user's own text
+        # ("make a QR code for 'call me'" / "QR code this link:
+        # https://..."). If neither is present ("turn this into a QR
+        # code"), leave content empty -- QrCodeAPI.generate_qr_code()
+        # falls back to the current clipboard contents itself, the same
+        # "this" the user almost certainly means, rather than this
+        # function guessing or forcing an unnecessary follow-up question.
+        content = _extract_url(text)
+        if not content:
+            m = re.search(r"[\"'\u2018\u2019\u201c\u201d]([^\"'\u2018\u2019\u201c\u201d]+)[\"'\u2018\u2019\u201c\u201d]", text)
+            content = m.group(1).strip() if m else ""
+        # Filename deliberately does NOT use _extract_name() here -- that
+        # function's quote-priority would re-consume the SAME quoted
+        # string already claimed as `content` above ("make a qr code for
+        # 'hello' called wifi_code" would otherwise return filename=
+        # "hello" instead of "wifi_code"). Matched directly against
+        # _NAME_TRIGGERS' "called X"/"named X" patterns instead, skipping
+        # the quote branch entirely.
+        filename = ""
+        for pattern in _NAME_TRIGGERS:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if m:
+                filename = m.group(1).strip().rstrip(".,!")
+                break
+        return {"content": content or "", "filename": filename}
+
+    if intent == "SCAN_QR_CODE":
+        # No slots -- always acts on selection_context's current
+        # selection, same pattern as EXTRACT_SELECTED_FILE above.
         return {}
 
     if intent == "DOWNLOAD_VIDEO_URL":
@@ -2347,7 +2703,7 @@ def extract_slots(intent: str, user_text: str, wcl_variables: Optional[List[str]
         return {"path": _default_root_for(text), "pattern": pattern}
 
     if intent == "SET_CLIPBOARD":
-        m = _QUOTED_RE.search(text)
+        m = _DOUBLE_QUOTED_RE.search(text) or _SINGLE_QUOTED_RE.search(text)
         if m:
             return {"value": m.group(1).strip()}
         m = re.search(r"(?:copy|set clipboard to)\s+(.+)$", text, re.IGNORECASE)

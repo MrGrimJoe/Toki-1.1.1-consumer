@@ -1,0 +1,5913 @@
+{
+ "0092": [
+  "display",
+  "show",
+  "print"
+ ],
+ "0162": [
+  "console",
+  "screen",
+  "clear"
+ ],
+ "0371": [
+  "ipsec",
+  "display",
+  "show"
+ ],
+ "0862": [
+  "file",
+  "content",
+  "display"
+ ],
+ "0863": [
+  "content",
+  "display",
+  "page"
+ ],
+ "0866": [
+  "text",
+  "sort",
+  "order"
+ ],
+ "0891": [
+  "console",
+  "screen",
+  "clear"
+ ],
+ "0974": [
+  "view",
+  "display",
+  "read"
+ ],
+ "0975": [
+  "view",
+  "display",
+  "read"
+ ],
+ "0977": [
+  "console",
+  "screen",
+  "clear"
+ ],
+ "0978": [
+  "console",
+  "screen",
+  "clear"
+ ],
+ "0979": [
+  "display",
+  "show",
+  "print"
+ ],
+ "1026": [
+  "display",
+  "show",
+  "print"
+ ],
+ "1104": [
+  "sound",
+  "audio",
+  "hardware",
+  "devices"
+ ],
+ "1106": [
+  "monitor",
+  "display",
+  "info",
+  "hardware"
+ ],
+ "1155": [
+  "screenshot",
+  "capture",
+  "snip"
+ ],
+ "0116": [
+  "jobs",
+  "view",
+  "list"
+ ],
+ "0117": [
+  "start",
+  "create",
+  "background"
+ ],
+ "0118": [
+  "terminate",
+  "cancel",
+  "stop"
+ ],
+ "0119": [
+  "monitor",
+  "pause",
+  "wait"
+ ],
+ "0120": [
+  "receive",
+  "get",
+  "output"
+ ],
+ "0121": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0122": [
+  "halt",
+  "pause",
+  "suspend"
+ ],
+ "0123": [
+  "continue",
+  "resume",
+  "restart"
+ ],
+ "0519": [
+  "start",
+  "dedup",
+  "optimization"
+ ],
+ "0520": [
+  "dedup",
+  "stop",
+  "optimization"
+ ],
+ "0829": [
+  "edit",
+  "config",
+  "boot"
+ ],
+ "0830": [
+  "recovery",
+  "repair",
+  "boot"
+ ],
+ "0037": [
+  "time",
+  "current",
+  "date"
+ ],
+ "0038": [
+  "adjust",
+  "set",
+  "change"
+ ],
+ "0039": [
+  "region",
+  "timezone",
+  "location"
+ ],
+ "0040": [
+  "configure",
+  "set",
+  "change"
+ ],
+ "1075": [
+  "region",
+  "timezone",
+  "settings",
+  "system"
+ ],
+ "0086": [
+  "display",
+  "custom",
+  "format"
+ ],
+ "0087": [
+  "wide",
+  "display",
+  "format"
+ ],
+ "0088": [
+  "binary",
+  "hex",
+  "inspect"
+ ],
+ "0183": [
+  "volume",
+  "bitlocker",
+  "encryption"
+ ],
+ "0186": [
+  "bitlocker",
+  "lock",
+  "encryption"
+ ],
+ "0187": [
+  "unlock",
+  "bitlocker",
+  "encryption"
+ ],
+ "0463": [
+  "disks",
+  "storage",
+  "drives"
+ ],
+ "0464": [
+  "configure",
+  "set",
+  "disk"
+ ],
+ "0465": [
+  "prepare",
+  "initialize",
+  "disk"
+ ],
+ "0466": [
+  "disk",
+  "wipe",
+  "clear"
+ ],
+ "0467": [
+  "volumes",
+  "disk",
+  "partitions"
+ ],
+ "0468": [
+  "partition",
+  "configure",
+  "set"
+ ],
+ "0469": [
+  "add",
+  "create",
+  "partition"
+ ],
+ "0470": [
+  "partition",
+  "remove",
+  "delete"
+ ],
+ "0471": [
+  "extend",
+  "resize",
+  "partition"
+ ],
+ "0472": [
+  "storage",
+  "volumes",
+  "drives"
+ ],
+ "0473": [
+  "volume",
+  "configure",
+  "set"
+ ],
+ "0474": [
+  "volume",
+  "initialize",
+  "format"
+ ],
+ "0475": [
+  "fix",
+  "repair",
+  "volume"
+ ],
+ "0476": [
+  "volume",
+  "optimize",
+  "defrag"
+ ],
+ "0482": [
+  "virtual",
+  "configure",
+  "set"
+ ],
+ "0483": [
+  "add",
+  "virtual",
+  "create"
+ ],
+ "0484": [
+  "virtual",
+  "remove",
+  "delete"
+ ],
+ "0525": [
+  "storage",
+  "volume",
+  "dedup"
+ ],
+ "0526": [
+  "activate",
+  "dedup",
+  "enable"
+ ],
+ "0527": [
+  "disable",
+  "deactivate",
+  "dedup"
+ ],
+ "0539": [
+  "storage",
+  "volume",
+  "qos"
+ ],
+ "0540": [
+  "volume",
+  "configure",
+  "set"
+ ],
+ "0559": [
+  "storage",
+  "volume",
+  "enclosure"
+ ],
+ "0560": [
+  "volume",
+  "configure",
+  "set"
+ ],
+ "0561": [
+  "storage",
+  "enclosure",
+  "disk"
+ ],
+ "0562": [
+  "configure",
+  "set",
+  "disk"
+ ],
+ "0815": [
+  "system",
+  "repair",
+  "files"
+ ],
+ "0816": [
+  "repair",
+  "disk",
+  "check"
+ ],
+ "0817": [
+  "partition",
+  "manage",
+  "disk"
+ ],
+ "0818": [
+  "prepare",
+  "disk",
+  "format"
+ ],
+ "0819": [
+  "optimize",
+  "disk",
+  "defragment"
+ ],
+ "0820": [
+  "manage",
+  "utility",
+  "filesystem"
+ ],
+ "0846": [
+  "files",
+  "disk",
+  "compression"
+ ],
+ "0872": [
+  "virtual",
+  "drive",
+  "substitute"
+ ],
+ "0878": [
+  "duplicate",
+  "copy",
+  "disk"
+ ],
+ "0879": [
+  "recover",
+  "files",
+  "disk"
+ ],
+ "0882": [
+  "label",
+  "volume",
+  "disk"
+ ],
+ "0883": [
+  "volume",
+  "info",
+  "disk"
+ ],
+ "0920": [
+  "volume",
+  "disk",
+  "mount"
+ ],
+ "0921": [
+  "shadow",
+  "copy",
+  "backup"
+ ],
+ "0995": [
+  "display",
+  "show",
+  "format"
+ ],
+ "0996": [
+  "display",
+  "show",
+  "format"
+ ],
+ "0997": [
+  "display",
+  "show",
+  "format"
+ ],
+ "1031": [
+  "convert",
+  "base64",
+  "decode"
+ ],
+ "1039": [
+  "monitor",
+  "system",
+  "diagnostics",
+  "health"
+ ],
+ "1048": [
+  "storage",
+  "report",
+  "disk",
+  "space"
+ ],
+ "1086": [
+  "storage",
+  "filesystem",
+  "drives",
+  "space"
+ ],
+ "1111": [
+  "disks",
+  "physical",
+  "storage",
+  "hardware"
+ ],
+ "1112": [
+  "disks",
+  "storage",
+  "partitions",
+  "layout"
+ ],
+ "1113": [
+  "storage",
+  "volumes",
+  "drives",
+  "filesystem"
+ ],
+ "1115": [
+  "disks",
+  "virtual",
+  "arrays",
+  "storage"
+ ],
+ "1131": [
+  "monitor",
+  "read",
+  "disk",
+  "performance"
+ ],
+ "1139": [
+  "hibernate",
+  "power",
+  "suspend"
+ ],
+ "1148": [
+  "clean",
+  "temp",
+  "cache",
+  "clear"
+ ],
+ "1149": [
+  "usage",
+  "storage",
+  "disk",
+  "space"
+ ],
+ "1152": [
+  "mute",
+  "silence",
+  "volume off"
+ ],
+ "1153": [
+  "sound",
+  "volume",
+  "set",
+  "adjust"
+ ],
+ "1159": [
+  "biggest",
+  "largest",
+  "files",
+  "disk usage"
+ ],
+ "0164": [
+  "events",
+  "audit",
+  "logs"
+ ],
+ "0165": [
+  "purge",
+  "logs",
+  "clear"
+ ],
+ "0166": [
+  "configure",
+  "limit",
+  "logs"
+ ],
+ "0167": [
+  "add",
+  "create",
+  "logs"
+ ],
+ "0168": [
+  "logs",
+  "remove",
+  "delete"
+ ],
+ "0169": [
+  "display",
+  "show",
+  "logs"
+ ],
+ "0170": [
+  "log",
+  "events",
+  "write"
+ ],
+ "0173": [
+  "view",
+  "events",
+  "logs"
+ ],
+ "0933": [
+  "log",
+  "event",
+  "manage"
+ ],
+ "0934": [
+  "log",
+  "event",
+  "create"
+ ],
+ "1044": [
+  "export",
+  "events",
+  "logs",
+  "diagnostics"
+ ],
+ "1073": [
+  "system",
+  "events",
+  "summary",
+  "logs"
+ ],
+ "1126": [
+  "events",
+  "application",
+  "errors",
+  "logs"
+ ],
+ "1127": [
+  "system",
+  "events",
+  "warnings",
+  "logs"
+ ],
+ "0124": [
+  "view",
+  "events",
+  "list"
+ ],
+ "0125": [
+  "create",
+  "generate",
+  "make"
+ ],
+ "0126": [
+  "subscribe",
+  "register",
+  "listen"
+ ],
+ "0127": [
+  "subscribe",
+  "register",
+  "listen"
+ ],
+ "0128": [
+  "subscribe",
+  "register",
+  "listen"
+ ],
+ "0129": [
+  "unsubscribe",
+  "remove",
+  "unregister"
+ ],
+ "0130": [
+  "monitor",
+  "pause",
+  "wait"
+ ],
+ "0001": [
+  "list",
+  "search",
+  "browse"
+ ],
+ "0002": [
+  "enter",
+  "change",
+  "navigate"
+ ],
+ "0003": [
+  "duplicate",
+  "copy",
+  "backup"
+ ],
+ "0004": [
+  "clean",
+  "remove",
+  "delete"
+ ],
+ "0005": [
+  "relocate",
+  "move",
+  "rename"
+ ],
+ "0006": [
+  "create",
+  "generate",
+  "make"
+ ],
+ "0007": [
+  "view",
+  "display",
+  "read"
+ ],
+ "0008": [
+  "modify",
+  "update",
+  "write"
+ ],
+ "0009": [
+  "append",
+  "add",
+  "write"
+ ],
+ "0010": [
+  "clean",
+  "empty",
+  "clear"
+ ],
+ "0026": [
+  "validate",
+  "verify",
+  "check"
+ ],
+ "0041": [
+  "view",
+  "check",
+  "read"
+ ],
+ "0042": [
+  "modify",
+  "set",
+  "write"
+ ],
+ "0043": [
+  "add",
+  "create",
+  "make"
+ ],
+ "0044": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0053": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "0054": [
+  "import",
+  "restore",
+  "load"
+ ],
+ "0059": [
+  "path",
+  "current",
+  "where"
+ ],
+ "0062": [
+  "expand",
+  "resolve",
+  "absolute"
+ ],
+ "0063": [
+  "convert",
+  "transform",
+  "change"
+ ],
+ "0064": [
+  "split",
+  "parse",
+  "analyze"
+ ],
+ "0065": [
+  "combine",
+  "merge",
+  "join"
+ ],
+ "0066": [
+  "get",
+  "fetch",
+  "retrieve"
+ ],
+ "0067": [
+  "modify",
+  "set",
+  "change"
+ ],
+ "0068": [
+  "modify",
+  "change",
+  "rename"
+ ],
+ "0069": [
+  "execute",
+  "open",
+  "launch"
+ ],
+ "0070": [
+  "reset",
+  "empty",
+  "clear"
+ ],
+ "0080": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "0089": [
+  "export",
+  "save",
+  "write"
+ ],
+ "0095": [
+  "tee",
+  "split",
+  "duplicate"
+ ],
+ "0102": [
+  "export",
+  "save",
+  "serialize"
+ ],
+ "0103": [
+  "deserialize",
+  "import",
+  "load"
+ ],
+ "0104": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "0105": [
+  "read",
+  "import",
+  "load"
+ ],
+ "0177": [
+  "authenticode",
+  "security",
+  "signature"
+ ],
+ "0210": [
+  "file",
+  "smb",
+  "close"
+ ],
+ "0500": [
+  "fileserver",
+  "storage",
+  "server"
+ ],
+ "0501": [
+  "fileserver",
+  "configure",
+  "set"
+ ],
+ "0502": [
+  "add",
+  "create",
+  "fileserver"
+ ],
+ "0503": [
+  "fileserver",
+  "remove",
+  "delete"
+ ],
+ "0504": [
+  "storage",
+  "shares",
+  "fileshare"
+ ],
+ "0505": [
+  "configure",
+  "set",
+  "fileshare"
+ ],
+ "0506": [
+  "add",
+  "create",
+  "fileshare"
+ ],
+ "0507": [
+  "fileshare",
+  "remove",
+  "delete"
+ ],
+ "0508": [
+  "control",
+  "access",
+  "fileshare"
+ ],
+ "0509": [
+  "configure",
+  "set",
+  "access"
+ ],
+ "0510": [
+  "add",
+  "create",
+  "access"
+ ],
+ "0511": [
+  "access",
+  "remove",
+  "delete"
+ ],
+ "0512": [
+  "storage",
+  "cluster",
+  "fileshare"
+ ],
+ "0513": [
+  "configure",
+  "set",
+  "cluster"
+ ],
+ "0514": [
+  "add",
+  "create",
+  "cluster"
+ ],
+ "0515": [
+  "cluster",
+  "remove",
+  "delete"
+ ],
+ "0848": [
+  "archive",
+  "cabinet",
+  "compress"
+ ],
+ "0850": [
+  "files",
+  "copy",
+  "backup"
+ ],
+ "0851": [
+  "copy",
+  "backup",
+  "robust"
+ ],
+ "0853": [
+  "relocate",
+  "move",
+  "files"
+ ],
+ "0855": [
+  "erase",
+  "files",
+  "delete"
+ ],
+ "0856": [
+  "delete",
+  "remove",
+  "directory"
+ ],
+ "0857": [
+  "delete",
+  "remove",
+  "directory"
+ ],
+ "0858": [
+  "make",
+  "create",
+  "directory"
+ ],
+ "0859": [
+  "create",
+  "make",
+  "directory"
+ ],
+ "0860": [
+  "list",
+  "files",
+  "directory"
+ ],
+ "0861": [
+  "tree",
+  "structure",
+  "directory"
+ ],
+ "0867": [
+  "paste",
+  "copy",
+  "clipboard"
+ ],
+ "0868": [
+  "attributes",
+  "modify",
+  "files"
+ ],
+ "0873": [
+  "file",
+  "associations",
+  "types"
+ ],
+ "0874": [
+  "file",
+  "associations",
+  "types"
+ ],
+ "0880": [
+  "replace",
+  "update",
+  "files"
+ ],
+ "0884": [
+  "change",
+  "navigate",
+  "directory"
+ ],
+ "0885": [
+  "change",
+  "navigate",
+  "directory"
+ ],
+ "0886": [
+  "push",
+  "save",
+  "directory"
+ ],
+ "0887": [
+  "restore",
+  "pop",
+  "directory"
+ ],
+ "0903": [
+  "path",
+  "variable",
+  "environment"
+ ],
+ "0913": [
+  "file",
+  "ftp",
+  "transfer"
+ ],
+ "0914": [
+  "file",
+  "transfer",
+  "tftp"
+ ],
+ "0965": [
+  "path",
+  "current",
+  "where"
+ ],
+ "0966": [
+  "path",
+  "current",
+  "where"
+ ],
+ "0968": [
+  "duplicate",
+  "copy",
+  "backup"
+ ],
+ "0970": [
+  "relocate",
+  "move",
+  "rename"
+ ],
+ "0972": [
+  "clean",
+  "remove",
+  "delete"
+ ],
+ "0976": [
+  "append",
+  "add",
+  "write"
+ ],
+ "0998": [
+  "view",
+  "check",
+  "read"
+ ],
+ "0999": [
+  "modify",
+  "set",
+  "write"
+ ],
+ "1012": [
+  "read",
+  "import",
+  "load"
+ ],
+ "1016": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "1017": [
+  "import",
+  "restore",
+  "load"
+ ],
+ "1029": [
+  "tee",
+  "split",
+  "duplicate"
+ ],
+ "1036": [
+  "find",
+  "large",
+  "files",
+  "search"
+ ],
+ "1042": [
+  "find",
+  "duplicate",
+  "files",
+  "cleanup"
+ ],
+ "1087": [
+  "count",
+  "files",
+  "measure",
+  "statistics"
+ ],
+ "1088": [
+  "count",
+  "measure",
+  "statistics",
+  "folders"
+ ],
+ "1089": [
+  "extensions",
+  "files",
+  "types",
+  "statistics"
+ ],
+ "1144": [
+  "archive",
+  "zip",
+  "compress"
+ ],
+ "1145": [
+  "unzip",
+  "decompress",
+  "extract"
+ ],
+ "1146": [
+  "paste",
+  "clipboard",
+  "read"
+ ],
+ "1147": [
+  "write",
+  "copy",
+  "clipboard"
+ ],
+ "1150": [
+  "start",
+  "run",
+  "open",
+  "launch"
+ ],
+ "1158": [
+  "content",
+  "find",
+  "search",
+  "grep"
+ ],
+ "0621": [
+  "hyperv",
+  "vm",
+  "virtualization"
+ ],
+ "0622": [
+  "virtual",
+  "list",
+  "machines"
+ ],
+ "0623": [
+  "virtual",
+  "create",
+  "machine"
+ ],
+ "0624": [
+  "virtual",
+  "remove",
+  "delete"
+ ],
+ "0625": [
+  "virtual",
+  "start",
+  "machine"
+ ],
+ "0626": [
+  "virtual",
+  "machine",
+  "stop"
+ ],
+ "0627": [
+  "virtual",
+  "machine",
+  "restart"
+ ],
+ "0628": [
+  "virtual",
+  "pause",
+  "suspend"
+ ],
+ "0629": [
+  "virtual",
+  "resume",
+  "machine"
+ ],
+ "0630": [
+  "virtual",
+  "save",
+  "machine"
+ ],
+ "0631": [
+  "virtual",
+  "move",
+  "migrate"
+ ],
+ "0632": [
+  "virtual",
+  "export",
+  "backup"
+ ],
+ "0633": [
+  "virtual",
+  "import",
+  "restore"
+ ],
+ "0634": [
+  "snapshot",
+  "virtual",
+  "checkpoint"
+ ],
+ "0635": [
+  "snapshots",
+  "virtual",
+  "checkpoints"
+ ],
+ "0636": [
+  "checkpoint",
+  "remove",
+  "delete"
+ ],
+ "0637": [
+  "checkpoint",
+  "restore",
+  "revert"
+ ],
+ "0638": [
+  "virtual",
+  "machine",
+  "rename"
+ ],
+ "0639": [
+  "virtual",
+  "configure",
+  "set"
+ ],
+ "0640": [
+  "virtual",
+  "measure",
+  "metrics"
+ ],
+ "0641": [
+  "host",
+  "hyperv",
+  "virtualization"
+ ],
+ "0642": [
+  "host",
+  "configure",
+  "set"
+ ],
+ "0643": [
+  "adapter",
+  "virtual",
+  "network"
+ ],
+ "0644": [
+  "add",
+  "create",
+  "network"
+ ],
+ "0645": [
+  "network",
+  "remove",
+  "delete"
+ ],
+ "0646": [
+  "configure",
+  "set",
+  "network"
+ ],
+ "0647": [
+  "virtual",
+  "harddisk",
+  "drive"
+ ],
+ "0648": [
+  "add",
+  "create",
+  "harddisk"
+ ],
+ "0649": [
+  "harddisk",
+  "remove",
+  "delete"
+ ],
+ "0650": [
+  "configure",
+  "set",
+  "harddisk"
+ ],
+ "0651": [
+  "virtual",
+  "dvd",
+  "drive"
+ ],
+ "0652": [
+  "add",
+  "create",
+  "dvd"
+ ],
+ "0653": [
+  "dvd",
+  "remove",
+  "delete"
+ ],
+ "0654": [
+  "configure",
+  "set",
+  "dvd"
+ ],
+ "0655": [
+  "virtual",
+  "processor",
+  "cpu"
+ ],
+ "0656": [
+  "configure",
+  "set",
+  "processor"
+ ],
+ "0657": [
+  "ram",
+  "virtual",
+  "memory"
+ ],
+ "0658": [
+  "configure",
+  "set",
+  "memory"
+ ],
+ "0659": [
+  "switch",
+  "virtual",
+  "network"
+ ],
+ "0660": [
+  "add",
+  "create",
+  "switch"
+ ],
+ "0661": [
+  "switch",
+  "remove",
+  "delete"
+ ],
+ "0662": [
+  "switch",
+  "configure",
+  "set"
+ ],
+ "0663": [
+  "virtual",
+  "backup",
+  "replication"
+ ],
+ "0664": [
+  "activate",
+  "enable",
+  "replication"
+ ],
+ "0665": [
+  "disable",
+  "deactivate",
+  "replication"
+ ],
+ "0666": [
+  "initial",
+  "start",
+  "replication"
+ ],
+ "0667": [
+  "virtual",
+  "stop",
+  "replication"
+ ],
+ "0668": [
+  "virtual",
+  "resume",
+  "replication"
+ ],
+ "0669": [
+  "virtual",
+  "replication",
+  "suspend"
+ ],
+ "0670": [
+  "virtual",
+  "authorization",
+  "replication"
+ ],
+ "0671": [
+  "add",
+  "create",
+  "authorization"
+ ],
+ "0672": [
+  "authorization",
+  "remove",
+  "delete"
+ ],
+ "0673": [
+  "configure",
+  "set",
+  "authorization"
+ ],
+ "0674": [
+  "pool",
+  "resource",
+  "virtual"
+ ],
+ "0675": [
+  "add",
+  "resource",
+  "create"
+ ],
+ "0676": [
+  "resource",
+  "remove",
+  "delete"
+ ],
+ "0677": [
+  "resource",
+  "configure",
+  "set"
+ ],
+ "0678": [
+  "partition",
+  "virtual",
+  "gpu"
+ ],
+ "0679": [
+  "gpu",
+  "configure",
+  "set"
+ ],
+ "0680": [
+  "virtual",
+  "remotefx",
+  "video"
+ ],
+ "0681": [
+  "add",
+  "remotefx",
+  "create"
+ ],
+ "0682": [
+  "remotefx",
+  "remove",
+  "delete"
+ ],
+ "0683": [
+  "remotefx",
+  "configure",
+  "set"
+ ],
+ "0684": [
+  "virtual",
+  "fibrechannel",
+  "hba"
+ ],
+ "0685": [
+  "add",
+  "create",
+  "fibrechannel"
+ ],
+ "0686": [
+  "fibrechannel",
+  "remove",
+  "delete"
+ ],
+ "0687": [
+  "configure",
+  "set",
+  "fibrechannel"
+ ],
+ "0688": [
+  "virtual",
+  "controller",
+  "scsi"
+ ],
+ "0689": [
+  "add",
+  "create",
+  "scsi"
+ ],
+ "0690": [
+  "scsi",
+  "remove",
+  "delete"
+ ],
+ "0691": [
+  "configure",
+  "set",
+  "scsi"
+ ],
+ "0692": [
+  "storage",
+  "virtual",
+  "key"
+ ],
+ "0693": [
+  "add",
+  "create",
+  "key"
+ ],
+ "0694": [
+  "key",
+  "remove",
+  "delete"
+ ],
+ "0695": [
+  "configure",
+  "set",
+  "key"
+ ],
+ "0696": [
+  "virtual",
+  "tpm",
+  "security"
+ ],
+ "0697": [
+  "add",
+  "tpm",
+  "create"
+ ],
+ "0698": [
+  "tpm",
+  "remove",
+  "delete"
+ ],
+ "0699": [
+  "tpm",
+  "configure",
+  "set"
+ ],
+ "0700": [
+  "virtual",
+  "security",
+  "machine"
+ ],
+ "0701": [
+  "configure",
+  "set",
+  "security"
+ ],
+ "0702": [
+  "virtual",
+  "port",
+  "com"
+ ],
+ "0703": [
+  "add",
+  "create",
+  "com"
+ ],
+ "0704": [
+  "com",
+  "remove",
+  "delete"
+ ],
+ "0705": [
+  "configure",
+  "set",
+  "com"
+ ],
+ "0706": [
+  "virtual",
+  "disk",
+  "floppy"
+ ],
+ "0707": [
+  "add",
+  "create",
+  "floppy"
+ ],
+ "0708": [
+  "floppy",
+  "remove",
+  "delete"
+ ],
+ "0709": [
+  "configure",
+  "set",
+  "floppy"
+ ],
+ "0710": [
+  "virtual",
+  "machine",
+  "guest"
+ ],
+ "0711": [
+  "virtual",
+  "service",
+  "guest"
+ ],
+ "0712": [
+  "activate",
+  "enable",
+  "guest"
+ ],
+ "0713": [
+  "disable",
+  "deactivate",
+  "guest"
+ ],
+ "0714": [
+  "virtual",
+  "integration",
+  "service"
+ ],
+ "0715": [
+  "integration",
+  "activate",
+  "enable"
+ ],
+ "0716": [
+  "disable",
+  "deactivate",
+  "integration"
+ ],
+ "0717": [
+  "snapshot",
+  "virtual",
+  "machine"
+ ],
+ "0718": [
+  "snapshot",
+  "virtual",
+  "create"
+ ],
+ "0719": [
+  "snapshot",
+  "remove",
+  "delete"
+ ],
+ "0720": [
+  "snapshot",
+  "virtual",
+  "restore"
+ ],
+ "0721": [
+  "snapshot",
+  "virtual",
+  "export"
+ ],
+ "0722": [
+  "virtual",
+  "machines",
+  "group"
+ ],
+ "0723": [
+  "add",
+  "create",
+  "group"
+ ],
+ "0724": [
+  "group",
+  "remove",
+  "delete"
+ ],
+ "0725": [
+  "configure",
+  "set",
+  "group"
+ ],
+ "0726": [
+  "add",
+  "group",
+  "member"
+ ],
+ "0727": [
+  "member",
+  "remove",
+  "delete"
+ ],
+ "0728": [
+  "virtual",
+  "network",
+  "acl"
+ ],
+ "0729": [
+  "add",
+  "create",
+  "acl"
+ ],
+ "0730": [
+  "acl",
+  "remove",
+  "delete"
+ ],
+ "0731": [
+  "configure",
+  "set",
+  "acl"
+ ],
+ "0732": [
+  "extended",
+  "network",
+  "acl"
+ ],
+ "0733": [
+  "add",
+  "create",
+  "extended"
+ ],
+ "0734": [
+  "extended",
+  "remove",
+  "delete"
+ ],
+ "0735": [
+  "extended",
+  "configure",
+  "set"
+ ],
+ "0736": [
+  "routing",
+  "network",
+  "domain"
+ ],
+ "0737": [
+  "add",
+  "create",
+  "routing"
+ ],
+ "0738": [
+  "routing",
+  "remove",
+  "delete"
+ ],
+ "0739": [
+  "configure",
+  "set",
+  "routing"
+ ],
+ "0740": [
+  "virtual",
+  "network",
+  "vlan"
+ ],
+ "0741": [
+  "configure",
+  "set",
+  "vlan"
+ ],
+ "0742": [
+  "team",
+  "network",
+  "mapping"
+ ],
+ "0743": [
+  "add",
+  "create",
+  "team"
+ ],
+ "0744": [
+  "team",
+  "remove",
+  "delete"
+ ],
+ "0745": [
+  "team",
+  "configure",
+  "set"
+ ],
+ "0746": [
+  "configuration",
+  "network",
+  "failover"
+ ],
+ "0747": [
+  "configure",
+  "set",
+  "failover"
+ ],
+ "0748": [
+  "virtual",
+  "isolation",
+  "network"
+ ],
+ "0749": [
+  "configure",
+  "set",
+  "isolation"
+ ],
+ "0750": [
+  "virtual",
+  "sriov",
+  "network"
+ ],
+ "0751": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0752": [
+  "virtual",
+  "network",
+  "rdma"
+ ],
+ "0753": [
+  "configure",
+  "set",
+  "rdma"
+ ],
+ "0754": [
+  "direct",
+  "network",
+  "packet"
+ ],
+ "0755": [
+  "configure",
+  "set",
+  "packet"
+ ],
+ "0756": [
+  "address",
+  "ip",
+  "network"
+ ],
+ "0757": [
+  "configure",
+  "set",
+  "ip"
+ ],
+ "0758": [
+  "guard",
+  "network",
+  "dhcp"
+ ],
+ "0759": [
+  "configure",
+  "set",
+  "dhcp"
+ ],
+ "0760": [
+  "network",
+  "guard",
+  "router"
+ ],
+ "0761": [
+  "configure",
+  "set",
+  "router"
+ ],
+ "0762": [
+  "port",
+  "network",
+  "mirroring"
+ ],
+ "0763": [
+  "port",
+  "configure",
+  "set"
+ ],
+ "0764": [
+  "virtual",
+  "vmq",
+  "network"
+ ],
+ "0765": [
+  "configure",
+  "set",
+  "vmq"
+ ],
+ "0766": [
+  "sriov",
+  "network",
+  "queue"
+ ],
+ "0767": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0768": [
+  "sriov",
+  "vf",
+  "network"
+ ],
+ "0769": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0770": [
+  "port",
+  "sriov",
+  "network"
+ ],
+ "0771": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0772": [
+  "policy",
+  "sriov",
+  "network"
+ ],
+ "0773": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0774": [
+  "sriov",
+  "setting",
+  "network"
+ ],
+ "0775": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0776": [
+  "network",
+  "sriov",
+  "counter"
+ ],
+ "0777": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0778": [
+  "sriov",
+  "network",
+  "statistics"
+ ],
+ "0779": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0780": [
+  "sriov",
+  "network",
+  "performance"
+ ],
+ "0781": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0782": [
+  "sriov",
+  "network",
+  "health"
+ ],
+ "0783": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0784": [
+  "diagnostic",
+  "sriov",
+  "network"
+ ],
+ "0785": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0786": [
+  "sriov",
+  "test",
+  "network"
+ ],
+ "0787": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0788": [
+  "event",
+  "sriov",
+  "network"
+ ],
+ "0789": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0790": [
+  "network",
+  "sriov",
+  "alert"
+ ],
+ "0791": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0792": [
+  "notification",
+  "sriov",
+  "network"
+ ],
+ "0793": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0794": [
+  "log",
+  "sriov",
+  "network"
+ ],
+ "0795": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0796": [
+  "report",
+  "sriov",
+  "network"
+ ],
+ "0797": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0798": [
+  "sriov",
+  "configuration",
+  "network"
+ ],
+ "0799": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0035": [
+  "patches",
+  "updates",
+  "fixes"
+ ],
+ "0131": [
+  "subscribers",
+  "view",
+  "list"
+ ],
+ "0132": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0133": [
+  "sources",
+  "debug",
+  "trace"
+ ],
+ "0134": [
+  "modify",
+  "configure",
+  "set"
+ ],
+ "0135": [
+  "start",
+  "begin",
+  "trace"
+ ],
+ "0136": [
+  "trace",
+  "stop",
+  "end"
+ ],
+ "0137": [
+  "view",
+  "runspace",
+  "list"
+ ],
+ "0138": [
+  "view",
+  "runspace",
+  "debug"
+ ],
+ "0139": [
+  "activate",
+  "debug",
+  "enable"
+ ],
+ "0140": [
+  "disable",
+  "deactivate",
+  "debug"
+ ],
+ "0141": [
+  "trace",
+  "debug",
+  "callstack"
+ ],
+ "0142": [
+  "breakpoints",
+  "list",
+  "debug"
+ ],
+ "0143": [
+  "create",
+  "set",
+  "breakpoint"
+ ],
+ "0144": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0145": [
+  "disable",
+  "deactivate",
+  "breakpoint"
+ ],
+ "0146": [
+  "breakpoint",
+  "activate",
+  "enable"
+ ],
+ "0147": [
+  "view",
+  "list",
+  "errors"
+ ],
+ "0148": [
+  "log",
+  "write",
+  "error"
+ ],
+ "0149": [
+  "alert",
+  "notify",
+  "warning"
+ ],
+ "0150": [
+  "verbose",
+  "detail",
+  "log"
+ ],
+ "0151": [
+  "log",
+  "trace",
+  "debug"
+ ],
+ "0152": [
+  "log",
+  "information",
+  "message"
+ ],
+ "0153": [
+  "status",
+  "update",
+  "progress"
+ ],
+ "0155": [
+  "instantiate",
+  "object",
+  "create"
+ ],
+ "0157": [
+  "generate",
+  "random",
+  "number"
+ ],
+ "0158": [
+  "filter",
+  "deduplicate",
+  "unique"
+ ],
+ "0159": [
+  "region",
+  "language",
+  "culture"
+ ],
+ "0160": [
+  "language",
+  "ui",
+  "culture"
+ ],
+ "0161": [
+  "host",
+  "console",
+  "environment"
+ ],
+ "0178": [
+  "authenticode",
+  "security",
+  "sign"
+ ],
+ "0179": [
+  "policy",
+  "security",
+  "execution"
+ ],
+ "0181": [
+  "policy",
+  "security",
+  "applocker"
+ ],
+ "0182": [
+  "policy",
+  "test",
+  "applocker"
+ ],
+ "0204": [
+  "add",
+  "create",
+  "shares"
+ ],
+ "0205": [
+  "shares",
+  "remove",
+  "delete"
+ ],
+ "0206": [
+  "configure",
+  "set",
+  "shares"
+ ],
+ "0209": [
+  "smb",
+  "files",
+  "open"
+ ],
+ "0212": [
+  "smb",
+  "configuration",
+  "server"
+ ],
+ "0213": [
+  "smb",
+  "configure",
+  "set"
+ ],
+ "0214": [
+  "smb",
+  "configuration",
+  "client"
+ ],
+ "0215": [
+  "smb",
+  "configure",
+  "set"
+ ],
+ "0216": [
+  "smb",
+  "multichannel",
+  "connections"
+ ],
+ "0217": [
+  "smb",
+  "multichannel",
+  "constraints"
+ ],
+ "0218": [
+  "add",
+  "create",
+  "multichannel"
+ ],
+ "0219": [
+  "multichannel",
+  "remove",
+  "delete"
+ ],
+ "0363": [
+  "ipsec",
+  "security",
+  "rules"
+ ],
+ "0364": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0365": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0366": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0367": [
+  "ipsec",
+  "activate",
+  "enable"
+ ],
+ "0368": [
+  "ipsec",
+  "disable",
+  "deactivate"
+ ],
+ "0369": [
+  "ipsec",
+  "duplicate",
+  "copy"
+ ],
+ "0370": [
+  "ipsec",
+  "change",
+  "rename"
+ ],
+ "0372": [
+  "ipsec",
+  "rules",
+  "mainmode"
+ ],
+ "0373": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0374": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0375": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0376": [
+  "ipsec",
+  "activate",
+  "enable"
+ ],
+ "0377": [
+  "ipsec",
+  "disable",
+  "deactivate"
+ ],
+ "0378": [
+  "quickmode",
+  "ipsec",
+  "rules"
+ ],
+ "0379": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0380": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0381": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0382": [
+  "ipsec",
+  "activate",
+  "enable"
+ ],
+ "0383": [
+  "ipsec",
+  "disable",
+  "deactivate"
+ ],
+ "0384": [
+  "ipsec",
+  "phase1",
+  "auth"
+ ],
+ "0385": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0386": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0387": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0388": [
+  "ipsec",
+  "auth",
+  "phase2"
+ ],
+ "0389": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0390": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0391": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0392": [
+  "ipsec",
+  "crypto",
+  "mainmode"
+ ],
+ "0393": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0394": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0395": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0396": [
+  "quickmode",
+  "crypto",
+  "ipsec"
+ ],
+ "0397": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0398": [
+  "add",
+  "create",
+  "ipsec"
+ ],
+ "0399": [
+  "ipsec",
+  "remove",
+  "delete"
+ ],
+ "0400": [
+  "ipsec",
+  "dosp",
+  "settings"
+ ],
+ "0444": [
+  "ipv4",
+  "configure",
+  "set"
+ ],
+ "0446": [
+  "ipv6",
+  "configure",
+  "set"
+ ],
+ "0458": [
+  "udp",
+  "configure",
+  "set"
+ ],
+ "0460": [
+  "configure",
+  "set",
+  "transport"
+ ],
+ "0461": [
+  "add",
+  "create",
+  "transport"
+ ],
+ "0462": [
+  "transport",
+  "remove",
+  "delete"
+ ],
+ "0477": [
+  "storage",
+  "arrays",
+  "pools"
+ ],
+ "0478": [
+  "storage",
+  "configure",
+  "set"
+ ],
+ "0479": [
+  "add",
+  "storage",
+  "create"
+ ],
+ "0480": [
+  "storage",
+  "remove",
+  "delete"
+ ],
+ "0481": [
+  "disks",
+  "virtual",
+  "storage"
+ ],
+ "0485": [
+  "storage",
+  "systems",
+  "providers"
+ ],
+ "0486": [
+  "storage",
+  "configuration",
+  "settings"
+ ],
+ "0487": [
+  "storage",
+  "configure",
+  "set"
+ ],
+ "0489": [
+  "storage",
+  "cluster",
+  "node"
+ ],
+ "0490": [
+  "storage",
+  "fault",
+  "domain"
+ ],
+ "0491": [
+  "storage",
+  "actions",
+  "health"
+ ],
+ "0492": [
+  "storage",
+  "settings",
+  "health"
+ ],
+ "0493": [
+  "configure",
+  "set",
+  "health"
+ ],
+ "0494": [
+  "counters",
+  "storage",
+  "reliability"
+ ],
+ "0495": [
+  "reset",
+  "reliability",
+  "clear"
+ ],
+ "0497": [
+  "configure",
+  "set",
+  "tier"
+ ],
+ "0498": [
+  "add",
+  "create",
+  "tier"
+ ],
+ "0499": [
+  "tier",
+  "remove",
+  "delete"
+ ],
+ "0516": [
+  "storage",
+  "deduplication",
+  "dedup"
+ ],
+ "0517": [
+  "configure",
+  "set",
+  "dedup"
+ ],
+ "0518": [
+  "status",
+  "storage",
+  "dedup"
+ ],
+ "0521": [
+  "automation",
+  "dedup",
+  "schedule"
+ ],
+ "0522": [
+  "configure",
+  "set",
+  "schedule"
+ ],
+ "0523": [
+  "add",
+  "create",
+  "schedule"
+ ],
+ "0524": [
+  "schedule",
+  "remove",
+  "delete"
+ ],
+ "0528": [
+  "storage",
+  "metadata",
+  "dedup"
+ ],
+ "0529": [
+  "dedup",
+  "metrics",
+  "statistics"
+ ],
+ "0530": [
+  "update",
+  "refresh",
+  "dedup"
+ ],
+ "0531": [
+  "storage",
+  "quality",
+  "qos"
+ ],
+ "0532": [
+  "configure",
+  "set",
+  "qos"
+ ],
+ "0533": [
+  "add",
+  "create",
+  "qos"
+ ],
+ "0534": [
+  "qos",
+  "remove",
+  "delete"
+ ],
+ "0535": [
+  "storage",
+  "qos",
+  "flow"
+ ],
+ "0536": [
+  "configure",
+  "set",
+  "flow"
+ ],
+ "0537": [
+  "add",
+  "create",
+  "flow"
+ ],
+ "0538": [
+  "flow",
+  "remove",
+  "delete"
+ ],
+ "0541": [
+  "storage",
+  "node",
+  "qos"
+ ],
+ "0542": [
+  "configure",
+  "set",
+  "node"
+ ],
+ "0543": [
+  "storage",
+  "port",
+  "qos"
+ ],
+ "0544": [
+  "port",
+  "configure",
+  "set"
+ ],
+ "0545": [
+  "store",
+  "policy",
+  "qos"
+ ],
+ "0546": [
+  "policy",
+  "configure",
+  "set"
+ ],
+ "0548": [
+  "configure",
+  "set",
+  "enclosure"
+ ],
+ "0549": [
+  "storage",
+  "firmware",
+  "enclosure"
+ ],
+ "0550": [
+  "update",
+  "firmware",
+  "enclosure"
+ ],
+ "0551": [
+  "storage",
+  "node",
+  "enclosure"
+ ],
+ "0552": [
+  "configure",
+  "set",
+  "node"
+ ],
+ "0553": [
+  "enclosure",
+  "data",
+  "vendor"
+ ],
+ "0554": [
+  "configure",
+  "set",
+  "vendor"
+ ],
+ "0555": [
+  "pool",
+  "storage",
+  "enclosure"
+ ],
+ "0556": [
+  "pool",
+  "configure",
+  "set"
+ ],
+ "0557": [
+  "storage",
+  "tier",
+  "enclosure"
+ ],
+ "0558": [
+  "configure",
+  "set",
+  "tier"
+ ],
+ "0565": [
+  "storage",
+  "port",
+  "enclosure"
+ ],
+ "0566": [
+  "port",
+  "configure",
+  "set"
+ ],
+ "0567": [
+  "storage",
+  "controller",
+  "enclosure"
+ ],
+ "0568": [
+  "controller",
+  "configure",
+  "set"
+ ],
+ "0569": [
+  "storage",
+  "expander",
+  "enclosure"
+ ],
+ "0570": [
+  "configure",
+  "set",
+  "expander"
+ ],
+ "0571": [
+  "port",
+  "enclosure",
+  "sas"
+ ],
+ "0572": [
+  "configure",
+  "set",
+  "sas"
+ ],
+ "0573": [
+  "port",
+  "enclosure",
+  "fibrechannel"
+ ],
+ "0574": [
+  "configure",
+  "set",
+  "fibrechannel"
+ ],
+ "0575": [
+  "storage",
+  "initiator",
+  "enclosure"
+ ],
+ "0576": [
+  "initiator",
+  "configure",
+  "set"
+ ],
+ "0577": [
+  "storage",
+  "target",
+  "enclosure"
+ ],
+ "0578": [
+  "target",
+  "configure",
+  "set"
+ ],
+ "0579": [
+  "storage",
+  "enclosure",
+  "lun"
+ ],
+ "0580": [
+  "configure",
+  "set",
+  "lun"
+ ],
+ "0581": [
+  "storage",
+  "namespace",
+  "enclosure"
+ ],
+ "0582": [
+  "namespace",
+  "configure",
+  "set"
+ ],
+ "0583": [
+  "storage",
+  "subsystem",
+  "enclosure"
+ ],
+ "0584": [
+  "configure",
+  "set",
+  "subsystem"
+ ],
+ "0585": [
+  "storage",
+  "provider",
+  "enclosure"
+ ],
+ "0586": [
+  "configure",
+  "set",
+  "provider"
+ ],
+ "0587": [
+  "storage",
+  "enclosure",
+  "health"
+ ],
+ "0588": [
+  "configure",
+  "set",
+  "health"
+ ],
+ "0591": [
+  "storage",
+  "capacity",
+  "enclosure"
+ ],
+ "0592": [
+  "configure",
+  "set",
+  "capacity"
+ ],
+ "0593": [
+  "storage",
+  "utilization",
+  "enclosure"
+ ],
+ "0594": [
+  "utilization",
+  "configure",
+  "set"
+ ],
+ "0595": [
+  "storage",
+  "throughput",
+  "enclosure"
+ ],
+ "0596": [
+  "throughput",
+  "configure",
+  "set"
+ ],
+ "0597": [
+  "storage",
+  "latency",
+  "enclosure"
+ ],
+ "0598": [
+  "configure",
+  "set",
+  "latency"
+ ],
+ "0599": [
+  "storage",
+  "iops",
+  "enclosure"
+ ],
+ "0600": [
+  "configure",
+  "set",
+  "iops"
+ ],
+ "0601": [
+  "storage",
+  "enclosure",
+  "bandwidth"
+ ],
+ "0602": [
+  "configure",
+  "set",
+  "bandwidth"
+ ],
+ "0603": [
+  "depth",
+  "enclosure",
+  "queue"
+ ],
+ "0604": [
+  "configure",
+  "set",
+  "queue"
+ ],
+ "0605": [
+  "storage",
+  "enclosure",
+  "error"
+ ],
+ "0606": [
+  "configure",
+  "set",
+  "error"
+ ],
+ "0607": [
+  "storage",
+  "event",
+  "enclosure"
+ ],
+ "0608": [
+  "event",
+  "configure",
+  "set"
+ ],
+ "0609": [
+  "storage",
+  "enclosure",
+  "alert"
+ ],
+ "0610": [
+  "configure",
+  "set",
+  "alert"
+ ],
+ "0611": [
+  "storage",
+  "notification",
+  "enclosure"
+ ],
+ "0612": [
+  "notification",
+  "configure",
+  "set"
+ ],
+ "0613": [
+  "log",
+  "storage",
+  "enclosure"
+ ],
+ "0614": [
+  "log",
+  "configure",
+  "set"
+ ],
+ "0615": [
+  "storage",
+  "report",
+  "enclosure"
+ ],
+ "0616": [
+  "report",
+  "configure",
+  "set"
+ ],
+ "0617": [
+  "diagnostic",
+  "storage",
+  "enclosure"
+ ],
+ "0618": [
+  "diagnostic",
+  "configure",
+  "set"
+ ],
+ "0619": [
+  "storage",
+  "test",
+  "enclosure"
+ ],
+ "0620": [
+  "test",
+  "configure",
+  "set"
+ ],
+ "0840": [
+  "policy",
+  "group",
+  "results"
+ ],
+ "0841": [
+  "policy",
+  "group",
+  "update"
+ ],
+ "0842": [
+  "policy",
+  "set",
+  "resultant"
+ ],
+ "0843": [
+  "policy",
+  "security",
+  "configure"
+ ],
+ "0844": [
+  "policy",
+  "security",
+  "audit"
+ ],
+ "0845": [
+  "files",
+  "security",
+  "encryption"
+ ],
+ "0847": [
+  "files",
+  "extract",
+  "compression"
+ ],
+ "0849": [
+  "files",
+  "extract",
+  "cab"
+ ],
+ "0852": [
+  "duplicate",
+  "files",
+  "copy"
+ ],
+ "0854": [
+  "files",
+  "remove",
+  "delete"
+ ],
+ "0864": [
+  "text",
+  "files",
+  "search"
+ ],
+ "0865": [
+  "find",
+  "search",
+  "text"
+ ],
+ "0871": [
+  "ownership",
+  "files",
+  "security"
+ ],
+ "0875": [
+  "compare",
+  "files",
+  "diff"
+ ],
+ "0876": [
+  "compare",
+  "files",
+  "diff"
+ ],
+ "0877": [
+  "compare",
+  "diff",
+  "disks"
+ ],
+ "0881": [
+  "files",
+  "change",
+  "rename"
+ ],
+ "0888": [
+  "command",
+  "customize",
+  "prompt"
+ ],
+ "0890": [
+  "console",
+  "color",
+  "set"
+ ],
+ "0892": [
+  "exit",
+  "terminal",
+  "close"
+ ],
+ "0897": [
+  "timeout",
+  "pause",
+  "wait"
+ ],
+ "0901": [
+  "set",
+  "variable",
+  "environment"
+ ],
+ "0902": [
+  "permanent",
+  "set",
+  "variable"
+ ],
+ "0906": [
+  "command",
+  "start",
+  "prompt"
+ ],
+ "0907": [
+  "start",
+  "shell",
+  "powershell"
+ ],
+ "0908": [
+  "core",
+  "start",
+  "powershell"
+ ],
+ "0909": [
+  "windows",
+  "subsystem",
+  "linux"
+ ],
+ "0910": [
+  "linux",
+  "shell",
+  "bash"
+ ],
+ "0919": [
+  "code",
+  "security",
+  "sign"
+ ],
+ "0922": [
+  "windows",
+  "restore",
+  "backup"
+ ],
+ "0923": [
+  "deployment",
+  "manage",
+  "image"
+ ],
+ "0924": [
+  "setup",
+  "components",
+  "windows"
+ ],
+ "0926": [
+  "console",
+  "manage",
+  "device"
+ ],
+ "0927": [
+  "filter",
+  "control",
+  "manager"
+ ],
+ "0932": [
+  "report",
+  "generate",
+  "trace"
+ ],
+ "0962": [
+  "list",
+  "search",
+  "browse"
+ ],
+ "0963": [
+  "list",
+  "search",
+  "browse"
+ ],
+ "0964": [
+  "enter",
+  "change",
+  "navigate"
+ ],
+ "0967": [
+  "duplicate",
+  "copy",
+  "backup"
+ ],
+ "0969": [
+  "relocate",
+  "move",
+  "rename"
+ ],
+ "0971": [
+  "clean",
+  "remove",
+  "delete"
+ ],
+ "0973": [
+  "create",
+  "generate",
+  "make"
+ ],
+ "0980": [
+  "monitor",
+  "inspect",
+  "check"
+ ],
+ "0982": [
+  "terminate",
+  "kill",
+  "stop"
+ ],
+ "0988": [
+  "filter",
+  "find",
+  "search"
+ ],
+ "0989": [
+  "filter",
+  "find",
+  "search"
+ ],
+ "0990": [
+  "choose",
+  "select",
+  "pick"
+ ],
+ "0991": [
+  "organize",
+  "group",
+  "categorize"
+ ],
+ "0992": [
+  "count",
+  "measure",
+  "calculate"
+ ],
+ "0993": [
+  "compare",
+  "diff",
+  "analyze"
+ ],
+ "0994": [
+  "compare",
+  "diff",
+  "analyze"
+ ],
+ "1000": [
+  "view",
+  "inspect",
+  "check"
+ ],
+ "1001": [
+  "assign",
+  "set",
+  "define"
+ ],
+ "1002": [
+  "find",
+  "search",
+  "grep"
+ ],
+ "1005": [
+  "fetch",
+  "query",
+  "retrieve"
+ ],
+ "1006": [
+  "fetch",
+  "download",
+  "request"
+ ],
+ "1010": [
+  "run",
+  "execute",
+  "expression"
+ ],
+ "1011": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "1013": [
+  "create",
+  "set",
+  "define"
+ ],
+ "1015": [
+  "create",
+  "define",
+  "make"
+ ],
+ "1019": [
+  "review",
+  "view",
+  "check"
+ ],
+ "1020": [
+  "review",
+  "view",
+  "check"
+ ],
+ "1022": [
+  "execute",
+  "rerun",
+  "repeat"
+ ],
+ "1023": [
+  "clean",
+  "reset",
+  "clear"
+ ],
+ "1024": [
+  "manual",
+  "documentation",
+  "help"
+ ],
+ "1028": [
+  "convert",
+  "string",
+  "output"
+ ],
+ "1030": [
+  "convert",
+  "base64",
+  "encode"
+ ],
+ "1032": [
+  "checksum",
+  "md5",
+  "hash"
+ ],
+ "1033": [
+  "checksum",
+  "hash",
+  "sha1"
+ ],
+ "1034": [
+  "checksum",
+  "sha256",
+  "hash"
+ ],
+ "1035": [
+  "discover",
+  "find",
+  "search"
+ ],
+ "1037": [
+  "clean",
+  "files",
+  "maintenance",
+  "temp"
+ ],
+ "1052": [
+  "windows",
+  "update",
+  "check",
+  "status"
+ ],
+ "1055": [
+  "view",
+  "list",
+  "variables",
+  "environment"
+ ],
+ "1056": [
+  "running",
+  "list",
+  "services",
+  "status"
+ ],
+ "1057": [
+  "status",
+  "stopped",
+  "services",
+  "list"
+ ],
+ "1058": [
+  "patches",
+  "updates",
+  "hotfix",
+  "history"
+ ],
+ "1064": [
+  "local",
+  "users",
+  "membership",
+  "groups"
+ ],
+ "1072": [
+  "windows",
+  "features",
+  "enabled",
+  "list"
+ ],
+ "1077": [
+  "input",
+  "layout",
+  "language",
+  "keyboard"
+ ],
+ "1078": [
+  "framework",
+  "dotnet",
+  "versions",
+  "installed"
+ ],
+ "1079": [
+  "check",
+  "version",
+  "info",
+  "powershell"
+ ],
+ "1080": [
+  "policy",
+  "security",
+  "execution",
+  "powershell"
+ ],
+ "1081": [
+  "modules",
+  "list",
+  "available",
+  "powershell"
+ ],
+ "1083": [
+  "aliases",
+  "commands",
+  "list",
+  "shortcuts"
+ ],
+ "1084": [
+  "list",
+  "variables",
+  "values",
+  "environment"
+ ],
+ "1085": [
+  "custom",
+  "list",
+  "functions",
+  "defined"
+ ],
+ "1090": [
+  "modified",
+  "recent",
+  "files",
+  "latest"
+ ],
+ "1091": [
+  "modified",
+  "files",
+  "old",
+  "oldest"
+ ],
+ "1092": [
+  "storage",
+  "large",
+  "size",
+  "folders"
+ ],
+ "1093": [
+  "storage",
+  "cleanup",
+  "empty",
+  "folders"
+ ],
+ "1097": [
+  "result",
+  "policy",
+  "group",
+  "settings"
+ ],
+ "1098": [
+  "windows",
+  "license",
+  "activation",
+  "status"
+ ],
+ "1099": [
+  "windows",
+  "license",
+  "key",
+  "product"
+ ],
+ "1110": [
+  "storage",
+  "disks",
+  "drives",
+  "logical"
+ ],
+ "1114": [
+  "storage",
+  "arrays",
+  "pools",
+  "disks"
+ ],
+ "1122": [
+  "windows",
+  "features",
+  "enabled",
+  "installed"
+ ],
+ "1123": [
+  "store",
+  "apps",
+  "installed",
+  "windows"
+ ],
+ "1136": [
+  "clean",
+  "trash",
+  "recycle bin",
+  "empty"
+ ],
+ "0027": [
+  "diagnose",
+  "test",
+  "check"
+ ],
+ "0028": [
+  "lookup",
+  "resolve",
+  "query"
+ ],
+ "0203": [
+  "smb",
+  "network",
+  "shares"
+ ],
+ "0207": [
+  "sessions",
+  "smb",
+  "network"
+ ],
+ "0211": [
+  "smb",
+  "connections",
+  "network"
+ ],
+ "0220": [
+  "server",
+  "network",
+  "dhcp"
+ ],
+ "0221": [
+  "add",
+  "authorize",
+  "dhcp"
+ ],
+ "0222": [
+  "unauthorize",
+  "dhcp",
+  "remove"
+ ],
+ "0223": [
+  "ipv4",
+  "dhcp",
+  "scope"
+ ],
+ "0224": [
+  "add",
+  "create",
+  "scope"
+ ],
+ "0225": [
+  "scope",
+  "remove",
+  "delete"
+ ],
+ "0226": [
+  "configure",
+  "set",
+  "scope"
+ ],
+ "0227": [
+  "ipv4",
+  "leases",
+  "dhcp"
+ ],
+ "0228": [
+  "add",
+  "create",
+  "lease"
+ ],
+ "0229": [
+  "lease",
+  "remove",
+  "delete"
+ ],
+ "0230": [
+  "reservations",
+  "dhcp",
+  "ipv4"
+ ],
+ "0231": [
+  "add",
+  "reservation",
+  "create"
+ ],
+ "0232": [
+  "reservation",
+  "remove",
+  "delete"
+ ],
+ "0233": [
+  "reservation",
+  "configure",
+  "set"
+ ],
+ "0234": [
+  "ipv6",
+  "dhcp",
+  "scope"
+ ],
+ "0235": [
+  "add",
+  "create",
+  "scope"
+ ],
+ "0236": [
+  "scope",
+  "remove",
+  "delete"
+ ],
+ "0237": [
+  "configure",
+  "set",
+  "scope"
+ ],
+ "0238": [
+  "leases",
+  "ipv6",
+  "dhcp"
+ ],
+ "0239": [
+  "add",
+  "create",
+  "lease"
+ ],
+ "0240": [
+  "lease",
+  "remove",
+  "delete"
+ ],
+ "0241": [
+  "reservations",
+  "ipv6",
+  "dhcp"
+ ],
+ "0242": [
+  "add",
+  "reservation",
+  "create"
+ ],
+ "0243": [
+  "reservation",
+  "remove",
+  "delete"
+ ],
+ "0244": [
+  "reservation",
+  "configure",
+  "set"
+ ],
+ "0245": [
+  "database",
+  "backup",
+  "dhcp"
+ ],
+ "0246": [
+  "export",
+  "dhcp",
+  "backup"
+ ],
+ "0247": [
+  "import",
+  "restore",
+  "dhcp"
+ ],
+ "0248": [
+  "export",
+  "backup",
+  "dhcp"
+ ],
+ "0249": [
+  "import",
+  "restore",
+  "dhcp"
+ ],
+ "0250": [
+  "dhcp",
+  "logs",
+  "audit"
+ ],
+ "0251": [
+  "configuration",
+  "dhcp",
+  "settings"
+ ],
+ "0252": [
+  "configure",
+  "set",
+  "dhcp"
+ ],
+ "0253": [
+  "ipv4",
+  "dhcp",
+  "classes"
+ ],
+ "0254": [
+  "add",
+  "create",
+  "class"
+ ],
+ "0255": [
+  "class",
+  "remove",
+  "delete"
+ ],
+ "0256": [
+  "configure",
+  "set",
+  "class"
+ ],
+ "0257": [
+  "ipv6",
+  "dhcp",
+  "classes"
+ ],
+ "0258": [
+  "add",
+  "create",
+  "class"
+ ],
+ "0259": [
+  "class",
+  "remove",
+  "delete"
+ ],
+ "0260": [
+  "configure",
+  "set",
+  "class"
+ ],
+ "0261": [
+  "exclusions",
+  "dhcp",
+  "ipv4"
+ ],
+ "0262": [
+  "add",
+  "create",
+  "exclusion"
+ ],
+ "0263": [
+  "exclusion",
+  "remove",
+  "delete"
+ ],
+ "0264": [
+  "exclusions",
+  "ipv6",
+  "dhcp"
+ ],
+ "0265": [
+  "add",
+  "create",
+  "exclusion"
+ ],
+ "0266": [
+  "exclusion",
+  "remove",
+  "delete"
+ ],
+ "0267": [
+  "ipv4",
+  "policies",
+  "dhcp"
+ ],
+ "0268": [
+  "add",
+  "policy",
+  "create"
+ ],
+ "0269": [
+  "policy",
+  "remove",
+  "delete"
+ ],
+ "0270": [
+  "policy",
+  "configure",
+  "set"
+ ],
+ "0271": [
+  "ipv6",
+  "policies",
+  "dhcp"
+ ],
+ "0272": [
+  "add",
+  "policy",
+  "create"
+ ],
+ "0273": [
+  "policy",
+  "remove",
+  "delete"
+ ],
+ "0274": [
+  "policy",
+  "configure",
+  "set"
+ ],
+ "0275": [
+  "ipv4",
+  "filters",
+  "dhcp"
+ ],
+ "0276": [
+  "add",
+  "filter",
+  "create"
+ ],
+ "0277": [
+  "filter",
+  "remove",
+  "delete"
+ ],
+ "0278": [
+  "filter",
+  "configure",
+  "set"
+ ],
+ "0279": [
+  "filters",
+  "ipv6",
+  "dhcp"
+ ],
+ "0280": [
+  "add",
+  "filter",
+  "create"
+ ],
+ "0281": [
+  "filter",
+  "remove",
+  "delete"
+ ],
+ "0282": [
+  "filter",
+  "configure",
+  "set"
+ ],
+ "0283": [
+  "ipv4",
+  "dhcp",
+  "statistics"
+ ],
+ "0284": [
+  "ipv6",
+  "dhcp",
+  "statistics"
+ ],
+ "0285": [
+  "dhcp",
+  "ip",
+  "free"
+ ],
+ "0286": [
+  "dhcp",
+  "ip",
+  "free"
+ ],
+ "0287": [
+  "dhcp",
+  "replicate",
+  "failover"
+ ],
+ "0288": [
+  "dhcp",
+  "replicate",
+  "failover"
+ ],
+ "0289": [
+  "add",
+  "dhcp",
+  "failover"
+ ],
+ "0290": [
+  "dhcp",
+  "failover",
+  "remove"
+ ],
+ "0291": [
+  "configure",
+  "set",
+  "failover"
+ ],
+ "0292": [
+  "ipv4",
+  "dhcp",
+  "failover"
+ ],
+ "0293": [
+  "add",
+  "dhcp",
+  "failover"
+ ],
+ "0294": [
+  "dhcp",
+  "failover",
+  "remove"
+ ],
+ "0295": [
+  "configure",
+  "set",
+  "failover"
+ ],
+ "0296": [
+  "ipv6",
+  "dhcp",
+  "failover"
+ ],
+ "0297": [
+  "network",
+  "server",
+  "dns"
+ ],
+ "0298": [
+  "dns",
+  "cache",
+  "resolve"
+ ],
+ "0299": [
+  "dns",
+  "flush",
+  "clear"
+ ],
+ "0300": [
+  "resource",
+  "dns",
+  "records"
+ ],
+ "0301": [
+  "add",
+  "create",
+  "dns"
+ ],
+ "0302": [
+  "dns",
+  "remove",
+  "delete"
+ ],
+ "0303": [
+  "modify",
+  "set",
+  "dns"
+ ],
+ "0304": [
+  "list",
+  "dns",
+  "zones"
+ ],
+ "0305": [
+  "add",
+  "create",
+  "zone"
+ ],
+ "0306": [
+  "zone",
+  "remove",
+  "delete"
+ ],
+ "0307": [
+  "configure",
+  "set",
+  "zone"
+ ],
+ "0308": [
+  "forwarders",
+  "network",
+  "dns"
+ ],
+ "0309": [
+  "add",
+  "forwarder",
+  "create"
+ ],
+ "0310": [
+  "forwarder",
+  "remove",
+  "delete"
+ ],
+ "0311": [
+  "forwarder",
+  "configure",
+  "set"
+ ],
+ "0312": [
+  "roothints",
+  "dns",
+  "root"
+ ],
+ "0313": [
+  "add",
+  "create",
+  "roothint"
+ ],
+ "0314": [
+  "roothint",
+  "remove",
+  "delete"
+ ],
+ "0315": [
+  "configure",
+  "set",
+  "roothint"
+ ],
+ "0316": [
+  "troubleshoot",
+  "dns",
+  "diagnostics"
+ ],
+ "0317": [
+  "configure",
+  "set",
+  "diagnostics"
+ ],
+ "0318": [
+  "configuration",
+  "dns",
+  "settings"
+ ],
+ "0319": [
+  "configure",
+  "set",
+  "dns"
+ ],
+ "0320": [
+  "dns",
+  "metrics",
+  "statistics"
+ ],
+ "0321": [
+  "reset",
+  "statistics",
+  "clear"
+ ],
+ "0322": [
+  "export",
+  "zone",
+  "backup"
+ ],
+ "0323": [
+  "import",
+  "restore",
+  "zone"
+ ],
+ "0324": [
+  "export",
+  "zone",
+  "backup"
+ ],
+ "0325": [
+  "import",
+  "restore",
+  "zone"
+ ],
+ "0326": [
+  "replicate",
+  "transfer",
+  "zone"
+ ],
+ "0327": [
+  "verify",
+  "test",
+  "dns"
+ ],
+ "0328": [
+  "register",
+  "dns",
+  "client"
+ ],
+ "0329": [
+  "rules",
+  "dns",
+  "nrpt"
+ ],
+ "0330": [
+  "add",
+  "create",
+  "nrpt"
+ ],
+ "0331": [
+  "nrpt",
+  "remove",
+  "delete"
+ ],
+ "0332": [
+  "configure",
+  "set",
+  "nrpt"
+ ],
+ "0333": [
+  "global",
+  "dns",
+  "nrpt"
+ ],
+ "0334": [
+  "configure",
+  "set",
+  "nrpt"
+ ],
+ "0335": [
+  "policy",
+  "dns",
+  "nrpt"
+ ],
+ "0336": [
+  "configure",
+  "set",
+  "nrpt"
+ ],
+ "0337": [
+  "dns",
+  "cache",
+  "client"
+ ],
+ "0338": [
+  "dns",
+  "flush",
+  "clear"
+ ],
+ "0339": [
+  "dns",
+  "settings",
+  "client"
+ ],
+ "0340": [
+  "configure",
+  "set",
+  "dns"
+ ],
+ "0341": [
+  "servers",
+  "dns",
+  "client"
+ ],
+ "0342": [
+  "configure",
+  "set",
+  "dns"
+ ],
+ "0343": [
+  "firewall",
+  "security",
+  "profiles"
+ ],
+ "0344": [
+  "firewall",
+  "configure",
+  "set"
+ ],
+ "0345": [
+  "rules",
+  "security",
+  "firewall"
+ ],
+ "0346": [
+  "firewall",
+  "configure",
+  "set"
+ ],
+ "0347": [
+  "add",
+  "create",
+  "firewall"
+ ],
+ "0348": [
+  "firewall",
+  "remove",
+  "delete"
+ ],
+ "0349": [
+  "firewall",
+  "activate",
+  "enable"
+ ],
+ "0350": [
+  "firewall",
+  "disable",
+  "deactivate"
+ ],
+ "0351": [
+  "firewall",
+  "duplicate",
+  "copy"
+ ],
+ "0352": [
+  "firewall",
+  "change",
+  "rename"
+ ],
+ "0353": [
+  "firewall",
+  "display",
+  "show"
+ ],
+ "0354": [
+  "firewall",
+  "configuration",
+  "settings"
+ ],
+ "0355": [
+  "firewall",
+  "configure",
+  "set"
+ ],
+ "0356": [
+  "firewall",
+  "filters",
+  "ports"
+ ],
+ "0357": [
+  "firewall",
+  "filters",
+  "address"
+ ],
+ "0358": [
+  "firewall",
+  "filters",
+  "application"
+ ],
+ "0359": [
+  "firewall",
+  "filters",
+  "service"
+ ],
+ "0360": [
+  "firewall",
+  "filters",
+  "interface"
+ ],
+ "0361": [
+  "firewall",
+  "interface",
+  "type"
+ ],
+ "0362": [
+  "firewall",
+  "filters",
+  "security"
+ ],
+ "0401": [
+  "adapters",
+  "interfaces",
+  "network"
+ ],
+ "0402": [
+  "modify",
+  "configure",
+  "network"
+ ],
+ "0403": [
+  "activate",
+  "network",
+  "enable"
+ ],
+ "0404": [
+  "disable",
+  "deactivate",
+  "network"
+ ],
+ "0405": [
+  "reset",
+  "network",
+  "restart"
+ ],
+ "0406": [
+  "change",
+  "network",
+  "rename"
+ ],
+ "0407": [
+  "properties",
+  "advanced",
+  "network"
+ ],
+ "0408": [
+  "configure",
+  "set",
+  "network"
+ ],
+ "0409": [
+  "network",
+  "bindings",
+  "protocols"
+ ],
+ "0410": [
+  "configure",
+  "set",
+  "bindings"
+ ],
+ "0411": [
+  "checksum",
+  "offload",
+  "network"
+ ],
+ "0412": [
+  "checksum",
+  "configure",
+  "set"
+ ],
+ "0413": [
+  "offload",
+  "network",
+  "encapsulation"
+ ],
+ "0414": [
+  "configure",
+  "set",
+  "encapsulation"
+ ],
+ "0415": [
+  "hardware",
+  "info",
+  "network"
+ ],
+ "0416": [
+  "ipsec",
+  "offload",
+  "network"
+ ],
+ "0417": [
+  "ipsec",
+  "configure",
+  "set"
+ ],
+ "0418": [
+  "offload",
+  "network",
+  "lso"
+ ],
+ "0419": [
+  "configure",
+  "set",
+  "lso"
+ ],
+ "0420": [
+  "network",
+  "management",
+  "power"
+ ],
+ "0421": [
+  "configure",
+  "set",
+  "power"
+ ],
+ "0422": [
+  "network",
+  "quality",
+  "qos"
+ ],
+ "0423": [
+  "configure",
+  "set",
+  "qos"
+ ],
+ "0425": [
+  "configure",
+  "set",
+  "rdma"
+ ],
+ "0426": [
+  "network",
+  "rsc",
+  "segmentation"
+ ],
+ "0427": [
+  "configure",
+  "set",
+  "rsc"
+ ],
+ "0428": [
+  "scaling",
+  "rss",
+  "network"
+ ],
+ "0429": [
+  "configure",
+  "set",
+  "rss"
+ ],
+ "0430": [
+  "network",
+  "sriov",
+  "virtualization"
+ ],
+ "0431": [
+  "sriov",
+  "configure",
+  "set"
+ ],
+ "0432": [
+  "network",
+  "metrics",
+  "statistics"
+ ],
+ "0433": [
+  "virtual",
+  "vmq",
+  "network"
+ ],
+ "0434": [
+  "configure",
+  "set",
+  "vmq"
+ ],
+ "0435": [
+  "virtual",
+  "vport",
+  "network"
+ ],
+ "0436": [
+  "vport",
+  "configure",
+  "set"
+ ],
+ "0437": [
+  "address",
+  "ip",
+  "network"
+ ],
+ "0438": [
+  "configure",
+  "set",
+  "ip"
+ ],
+ "0439": [
+  "add",
+  "create",
+  "ip"
+ ],
+ "0440": [
+  "ip",
+  "remove",
+  "delete"
+ ],
+ "0441": [
+  "interface",
+  "ip",
+  "network"
+ ],
+ "0442": [
+  "configure",
+  "set",
+  "interface"
+ ],
+ "0443": [
+  "ipv4",
+  "protocol",
+  "network"
+ ],
+ "0445": [
+  "ipv6",
+  "protocol",
+  "network"
+ ],
+ "0447": [
+  "network",
+  "routing",
+  "routes"
+ ],
+ "0448": [
+  "configure",
+  "set",
+  "routes"
+ ],
+ "0449": [
+  "add",
+  "create",
+  "routes"
+ ],
+ "0450": [
+  "routes",
+  "remove",
+  "delete"
+ ],
+ "0451": [
+  "neighbors",
+  "network",
+  "arp"
+ ],
+ "0452": [
+  "configure",
+  "set",
+  "neighbors"
+ ],
+ "0453": [
+  "add",
+  "create",
+  "neighbors"
+ ],
+ "0454": [
+  "neighbors",
+  "remove",
+  "delete"
+ ],
+ "0455": [
+  "tcp",
+  "network",
+  "settings"
+ ],
+ "0456": [
+  "configure",
+  "set",
+  "tcp"
+ ],
+ "0457": [
+  "udp",
+  "network",
+  "settings"
+ ],
+ "0459": [
+  "filters",
+  "network",
+  "transport"
+ ],
+ "0563": [
+  "adapter",
+  "storage",
+  "enclosure"
+ ],
+ "0564": [
+  "adapter",
+  "configure",
+  "set"
+ ],
+ "0800": [
+  "config",
+  "ip",
+  "network"
+ ],
+ "0801": [
+  "test",
+  "connectivity",
+  "network"
+ ],
+ "0802": [
+  "route",
+  "network",
+  "trace"
+ ],
+ "0803": [
+  "path",
+  "network",
+  "trace"
+ ],
+ "0804": [
+  "connections",
+  "ports",
+  "network"
+ ],
+ "0805": [
+  "lookup",
+  "resolve",
+  "dns"
+ ],
+ "0806": [
+  "lookup",
+  "query",
+  "dns"
+ ],
+ "0807": [
+  "network",
+  "cache",
+  "arp"
+ ],
+ "0808": [
+  "network",
+  "address",
+  "mac"
+ ],
+ "0809": [
+  "table",
+  "routing",
+  "network"
+ ],
+ "0810": [
+  "shell",
+  "configure",
+  "network"
+ ],
+ "0825": [
+  "manage",
+  "control",
+  "network"
+ ],
+ "1038": [
+  "network",
+  "wifi",
+  "passwords",
+  "credentials"
+ ],
+ "1041": [
+  "troubleshoot",
+  "connectivity",
+  "network",
+  "diagnostics"
+ ],
+ "1050": [
+  "adapters",
+  "info",
+  "network",
+  "status"
+ ],
+ "1051": [
+  "firewall",
+  "security",
+  "check",
+  "status"
+ ],
+ "1059": [
+  "network",
+  "view",
+  "cache",
+  "dns"
+ ],
+ "1060": [
+  "table",
+  "cache",
+  "network",
+  "arp"
+ ],
+ "1061": [
+  "table",
+  "routes",
+  "routing",
+  "network"
+ ],
+ "1062": [
+  "listening",
+  "network",
+  "ports",
+  "open"
+ ],
+ "1069": [
+  "smb",
+  "files",
+  "network",
+  "shares"
+ ],
+ "1103": [
+  "adapters",
+  "details",
+  "network",
+  "hardware"
+ ],
+ "1116": [
+  "active",
+  "connections",
+  "established",
+  "network"
+ ],
+ "1117": [
+  "listening",
+  "ports",
+  "services",
+  "network"
+ ],
+ "1118": [
+  "network",
+  "configuration",
+  "servers",
+  "dns"
+ ],
+ "1119": [
+  "network",
+  "ip",
+  "routes",
+  "routing"
+ ],
+ "1120": [
+  "firewall",
+  "security",
+  "enabled",
+  "rules"
+ ],
+ "1132": [
+  "monitor",
+  "throughput",
+  "network",
+  "performance"
+ ],
+ "0163": [
+  "time",
+  "measure",
+  "performance"
+ ],
+ "0171": [
+  "counters",
+  "monitor",
+  "performance"
+ ],
+ "0172": [
+  "counters",
+  "export",
+  "save"
+ ],
+ "0496": [
+  "storage",
+  "tier",
+  "performance"
+ ],
+ "0589": [
+  "storage",
+  "enclosure",
+  "performance"
+ ],
+ "0590": [
+  "configure",
+  "set",
+  "performance"
+ ],
+ "0928": [
+  "load",
+  "counter",
+  "performance"
+ ],
+ "0929": [
+  "unload",
+  "counter",
+  "performance"
+ ],
+ "1043": [
+  "monitor",
+  "watch",
+  "performance",
+  "cpu"
+ ],
+ "1066": [
+  "usage",
+  "memory",
+  "monitor",
+  "performance"
+ ],
+ "1067": [
+  "hardware",
+  "info",
+  "processor",
+  "cpu"
+ ],
+ "1128": [
+  "counters",
+  "metrics",
+  "monitor",
+  "performance"
+ ],
+ "1129": [
+  "usage",
+  "performance",
+  "monitor",
+  "cpu"
+ ],
+ "1130": [
+  "monitor",
+  "memory",
+  "available",
+  "performance"
+ ],
+ "1133": [
+  "system",
+  "counter",
+  "uptime",
+  "performance"
+ ],
+ "1135": [
+  "count",
+  "system",
+  "threads",
+  "performance"
+ ],
+ "0188": [
+  "bitlocker",
+  "encryption",
+  "suspend"
+ ],
+ "0828": [
+  "config",
+  "settings",
+  "power"
+ ],
+ "0838": [
+  "shutdown",
+  "computer",
+  "restart"
+ ],
+ "0839": [
+  "computer",
+  "reboot",
+  "restart"
+ ],
+ "0898": [
+  "sleep",
+  "pause",
+  "wait"
+ ],
+ "1074": [
+  "plan",
+  "battery",
+  "settings",
+  "power"
+ ],
+ "1107": [
+  "status",
+  "laptop",
+  "battery",
+  "power"
+ ],
+ "1138": [
+  "sleep",
+  "power",
+  "suspend"
+ ],
+ "1141": [
+  "status",
+  "battery",
+  "power"
+ ],
+ "0090": [
+  "send",
+  "output",
+  "print"
+ ],
+ "0011": [
+  "monitor",
+  "inspect",
+  "check"
+ ],
+ "0012": [
+  "terminate",
+  "kill",
+  "stop"
+ ],
+ "0014": [
+  "pause",
+  "wait",
+  "delay"
+ ],
+ "0015": [
+  "troubleshoot",
+  "debug",
+  "analyze"
+ ],
+ "0202": [
+  "tasks",
+  "details",
+  "info"
+ ],
+ "0811": [
+  "processes",
+  "tasks",
+  "list"
+ ],
+ "0812": [
+  "terminate",
+  "kill",
+  "stop"
+ ],
+ "0981": [
+  "monitor",
+  "inspect",
+  "check"
+ ],
+ "0983": [
+  "terminate",
+  "kill",
+  "stop"
+ ],
+ "0984": [
+  "run",
+  "execute",
+  "launch"
+ ],
+ "1003": [
+  "iterate",
+  "loop",
+  "process"
+ ],
+ "1004": [
+  "iterate",
+  "loop",
+  "process"
+ ],
+ "1047": [
+  "monitor",
+  "processes",
+  "cpu",
+  "performance"
+ ],
+ "1125": [
+  "scheduled",
+  "tasks",
+  "results",
+  "history"
+ ],
+ "1134": [
+  "count",
+  "processes",
+  "system",
+  "performance"
+ ],
+ "1140": [
+  "task manager",
+  "open",
+  "processes"
+ ],
+ "1151": [
+  "exit",
+  "close",
+  "kill",
+  "quit"
+ ],
+ "0822": [
+  "modify",
+  "query",
+  "registry"
+ ],
+ "0823": [
+  "gui",
+  "editor",
+  "registry"
+ ],
+ "1040": [
+  "installed",
+  "inventory",
+  "list",
+  "software"
+ ],
+ "1142": [
+  "installed",
+  "list",
+  "programs",
+  "apps"
+ ],
+ "1154": [
+  "check",
+  "browser",
+  "default"
+ ],
+ "1157": [
+  "desktop",
+  "background",
+  "wallpaper"
+ ],
+ "1160": [
+  "display",
+  "blue light",
+  "night light"
+ ],
+ "0025": [
+  "diagnose",
+  "test",
+  "ping"
+ ],
+ "0108": [
+  "export",
+  "save",
+  "backup"
+ ],
+ "0109": [
+  "import",
+  "restore",
+  "load"
+ ],
+ "0110": [
+  "view",
+  "list",
+  "show"
+ ],
+ "0111": [
+  "establish",
+  "start",
+  "create"
+ ],
+ "0112": [
+  "close",
+  "remove",
+  "delete"
+ ],
+ "0113": [
+  "enter",
+  "connect",
+  "remote"
+ ],
+ "0114": [
+  "exit",
+  "disconnect",
+  "leave"
+ ],
+ "0115": [
+  "run",
+  "execute",
+  "remote"
+ ],
+ "0424": [
+  "remote",
+  "network",
+  "rdma"
+ ],
+ "0911": [
+  "ssh",
+  "connect",
+  "remote"
+ ],
+ "0912": [
+  "telnet",
+  "connect",
+  "remote"
+ ],
+ "0940": [
+  "session",
+  "shadow",
+  "remote"
+ ],
+ "0941": [
+  "desktop",
+  "connect",
+  "remote"
+ ],
+ "0942": [
+  "desktop",
+  "admin",
+  "remote"
+ ],
+ "0943": [
+  "desktop",
+  "console",
+  "remote"
+ ],
+ "0944": [
+  "desktop",
+  "connect",
+  "remote"
+ ],
+ "0945": [
+  "desktop",
+  "remote",
+  "width"
+ ],
+ "0946": [
+  "desktop",
+  "height",
+  "remote"
+ ],
+ "0947": [
+  "desktop",
+  "fullscreen",
+  "remote"
+ ],
+ "0948": [
+  "desktop",
+  "public",
+  "remote"
+ ],
+ "0949": [
+  "desktop",
+  "remote",
+  "span"
+ ],
+ "0950": [
+  "desktop",
+  "multimonitor",
+  "remote"
+ ],
+ "0951": [
+  "desktop",
+  "remote",
+  "edit"
+ ],
+ "0952": [
+  "desktop",
+  "remote",
+  "migrate"
+ ],
+ "0953": [
+  "desktop",
+  "shadow",
+  "remote"
+ ],
+ "0954": [
+  "desktop",
+  "control",
+  "remote"
+ ],
+ "0955": [
+  "desktop",
+  "remote",
+  "noprompt"
+ ],
+ "0956": [
+  "desktop",
+  "restricted",
+  "remote"
+ ],
+ "0957": [
+  "desktop",
+  "guard",
+  "remote"
+ ],
+ "0958": [
+  "desktop",
+  "remote",
+  "prompt"
+ ],
+ "0959": [
+  "desktop",
+  "remote",
+  "certificate"
+ ],
+ "0960": [
+  "desktop",
+  "plugin",
+  "remote"
+ ],
+ "0961": [
+  "desktop",
+  "loadbalance",
+  "remote"
+ ],
+ "0193": [
+  "scheduled",
+  "tasks",
+  "list"
+ ],
+ "0194": [
+  "tasks",
+  "configure",
+  "set"
+ ],
+ "0195": [
+  "add",
+  "create",
+  "tasks"
+ ],
+ "0196": [
+  "tasks",
+  "register",
+  "create"
+ ],
+ "0197": [
+  "tasks",
+  "remove",
+  "unregister"
+ ],
+ "0198": [
+  "tasks",
+  "start",
+  "run"
+ ],
+ "0199": [
+  "terminate",
+  "tasks",
+  "stop"
+ ],
+ "0200": [
+  "tasks",
+  "activate",
+  "enable"
+ ],
+ "0201": [
+  "tasks",
+  "disable",
+  "deactivate"
+ ],
+ "0826": [
+  "tasks",
+  "scheduled",
+  "automate"
+ ],
+ "0827": [
+  "task",
+  "automate",
+  "schedule"
+ ],
+ "1054": [
+  "tasks",
+  "scheduled",
+  "list",
+  "automation"
+ ],
+ "1124": [
+  "running",
+  "scheduled",
+  "tasks",
+  "automation"
+ ],
+ "0045": [
+  "view",
+  "inspect",
+  "check"
+ ],
+ "0046": [
+  "assign",
+  "set",
+  "define"
+ ],
+ "0047": [
+  "create",
+  "define",
+  "make"
+ ],
+ "0048": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0049": [
+  "reset",
+  "empty",
+  "clear"
+ ],
+ "0050": [
+  "view",
+  "list",
+  "show"
+ ],
+ "0051": [
+  "create",
+  "set",
+  "define"
+ ],
+ "0052": [
+  "create",
+  "define",
+  "make"
+ ],
+ "0055": [
+  "view",
+  "list",
+  "show"
+ ],
+ "0056": [
+  "create",
+  "mount",
+  "map"
+ ],
+ "0057": [
+  "unmap",
+  "remove",
+  "delete"
+ ],
+ "0058": [
+  "view",
+  "list",
+  "show"
+ ],
+ "0060": [
+  "store",
+  "push",
+  "save"
+ ],
+ "0061": [
+  "return",
+  "restore",
+  "pop"
+ ],
+ "0071": [
+  "options",
+  "configure",
+  "settings"
+ ],
+ "0072": [
+  "modify",
+  "configure",
+  "set"
+ ],
+ "0073": [
+  "keys",
+  "shortcuts",
+  "bindings"
+ ],
+ "0074": [
+  "configure",
+  "set",
+  "bind"
+ ],
+ "0075": [
+  "unbind",
+  "remove",
+  "delete"
+ ],
+ "0076": [
+  "verbs",
+  "list",
+  "show"
+ ],
+ "0077": [
+  "discover",
+  "find",
+  "search"
+ ],
+ "0078": [
+  "manual",
+  "documentation",
+  "help"
+ ],
+ "0079": [
+  "update",
+  "download",
+  "refresh"
+ ],
+ "0081": [
+  "gui",
+  "visual",
+  "interface"
+ ],
+ "0082": [
+  "properties",
+  "inspect",
+  "analyze"
+ ],
+ "0083": [
+  "metadata",
+  "info",
+  "types"
+ ],
+ "0084": [
+  "modify",
+  "update",
+  "refresh"
+ ],
+ "0085": [
+  "clear",
+  "remove",
+  "delete"
+ ],
+ "0093": [
+  "ignore",
+  "discard",
+  "suppress"
+ ],
+ "0094": [
+  "convert",
+  "string",
+  "output"
+ ],
+ "0096": [
+  "extend",
+  "add",
+  "modify"
+ ],
+ "0097": [
+  "compare",
+  "diff",
+  "analyze"
+ ],
+ "0098": [
+  "convert",
+  "export",
+  "html"
+ ],
+ "0099": [
+  "convert",
+  "xml",
+  "export"
+ ],
+ "0100": [
+  "encrypt",
+  "protect",
+  "secure"
+ ],
+ "0101": [
+  "convert",
+  "decrypt",
+  "read"
+ ],
+ "0106": [
+  "convert",
+  "export",
+  "transform"
+ ],
+ "0107": [
+  "convert",
+  "parse",
+  "import"
+ ],
+ "0821": [
+  "wmi",
+  "system",
+  "query"
+ ],
+ "0900": [
+  "echo",
+  "display",
+  "print"
+ ],
+ "1025": [
+  "manual",
+  "documentation",
+  "help"
+ ],
+ "0174": [
+  "permissions",
+  "security",
+  "acl"
+ ],
+ "0175": [
+  "permissions",
+  "modify",
+  "set"
+ ],
+ "0176": [
+  "security",
+  "pfx",
+  "certificate"
+ ],
+ "0184": [
+  "bitlocker",
+  "enable",
+  "encryption"
+ ],
+ "0185": [
+  "disable",
+  "bitlocker",
+  "encryption"
+ ],
+ "0189": [
+  "resume",
+  "bitlocker",
+  "encryption"
+ ],
+ "0190": [
+  "bitlocker",
+  "backup",
+  "recovery"
+ ],
+ "0191": [
+  "add",
+  "bitlocker",
+  "key"
+ ],
+ "0192": [
+  "bitlocker",
+  "remove",
+  "key"
+ ],
+ "0869": [
+  "permissions",
+  "security",
+  "acl"
+ ],
+ "0870": [
+  "permissions",
+  "security",
+  "acl"
+ ],
+ "0915": [
+  "security",
+  "utility",
+  "certificate"
+ ],
+ "0916": [
+  "security",
+  "request",
+  "certificate"
+ ],
+ "0917": [
+  "create",
+  "security",
+  "certificate"
+ ],
+ "0918": [
+  "convert",
+  "security",
+  "certificate"
+ ],
+ "1053": [
+  "status",
+  "security",
+  "bitlocker",
+  "encryption"
+ ],
+ "1094": [
+  "permissions",
+  "files",
+  "security",
+  "acl"
+ ],
+ "1095": [
+  "permissions",
+  "security",
+  "acl",
+  "folders"
+ ],
+ "1121": [
+  "status",
+  "defender",
+  "security",
+  "antivirus"
+ ],
+ "0016": [
+  "status",
+  "manage",
+  "control"
+ ],
+ "0017": [
+  "start",
+  "activate",
+  "enable"
+ ],
+ "0018": [
+  "disable",
+  "deactivate",
+  "stop"
+ ],
+ "0019": [
+  "reboot",
+  "restart",
+  "reload"
+ ],
+ "0020": [
+  "halt",
+  "pause",
+  "suspend"
+ ],
+ "0021": [
+  "continue",
+  "resume",
+  "restart"
+ ],
+ "0022": [
+  "modify",
+  "configure",
+  "change"
+ ],
+ "0023": [
+  "setup",
+  "create",
+  "install"
+ ],
+ "0024": [
+  "uninstall",
+  "remove",
+  "delete"
+ ],
+ "0824": [
+  "manage",
+  "service",
+  "control"
+ ],
+ "0986": [
+  "start",
+  "activate",
+  "enable"
+ ],
+ "0987": [
+  "disable",
+  "deactivate",
+  "stop"
+ ],
+ "1046": [
+  "monitor",
+  "running",
+  "services",
+  "status"
+ ],
+ "0894": [
+  "script",
+  "batch",
+  "call"
+ ],
+ "0895": [
+  "label",
+  "goto",
+  "batch"
+ ],
+ "0899": [
+  "pause",
+  "stop",
+  "wait"
+ ],
+ "0032": [
+  "specs",
+  "details",
+  "info"
+ ],
+ "0033": [
+  "fetch",
+  "query",
+  "retrieve"
+ ],
+ "0034": [
+  "fetch",
+  "query",
+  "retrieve"
+ ],
+ "0036": [
+  "duration",
+  "runtime",
+  "uptime"
+ ],
+ "0180": [
+  "policy",
+  "configure",
+  "set"
+ ],
+ "0488": [
+  "storage",
+  "subsystem",
+  "hardware"
+ ],
+ "0547": [
+  "storage",
+  "enclosure",
+  "hardware"
+ ],
+ "0813": [
+  "system",
+  "details",
+  "info"
+ ],
+ "0814": [
+  "gui",
+  "system",
+  "information"
+ ],
+ "0831": [
+  "view",
+  "drivers",
+  "list"
+ ],
+ "0832": [
+  "check",
+  "os",
+  "version"
+ ],
+ "0833": [
+  "name",
+  "hostname",
+  "computer"
+ ],
+ "0904": [
+  "system",
+  "set",
+  "date"
+ ],
+ "0905": [
+  "time",
+  "set",
+  "system"
+ ],
+ "0925": [
+  "utility",
+  "manage",
+  "driver"
+ ],
+ "0985": [
+  "status",
+  "manage",
+  "control"
+ ],
+ "1065": [
+  "system",
+  "duration",
+  "runtime",
+  "uptime"
+ ],
+ "1068": [
+  "hardware",
+  "graphics",
+  "gpu",
+  "info"
+ ],
+ "1070": [
+  "hardware",
+  "printers",
+  "list",
+  "devices"
+ ],
+ "1071": [
+  "installed",
+  "drivers",
+  "list",
+  "hardware"
+ ],
+ "1076": [
+  "region",
+  "language",
+  "locale",
+  "system"
+ ],
+ "1100": [
+  "hardware",
+  "system",
+  "info",
+  "bios"
+ ],
+ "1101": [
+  "hardware",
+  "system",
+  "info",
+  "motherboard"
+ ],
+ "1102": [
+  "ram",
+  "memory",
+  "info",
+  "hardware"
+ ],
+ "1105": [
+  "hardware",
+  "connected",
+  "usb",
+  "devices"
+ ],
+ "1108": [
+  "hardware",
+  "temperature",
+  "monitor",
+  "sensors"
+ ],
+ "1109": [
+  "hardware",
+  "speed",
+  "cooling",
+  "fan"
+ ],
+ "0154": [
+  "password",
+  "credentials",
+  "secure"
+ ],
+ "0156": [
+  "add",
+  "compile",
+  "type"
+ ],
+ "0208": [
+  "disconnect",
+  "close",
+  "sessions"
+ ],
+ "0834": [
+  "check",
+  "user",
+  "identity"
+ ],
+ "0835": [
+  "sessions",
+  "list",
+  "users"
+ ],
+ "0836": [
+  "session",
+  "query",
+  "users"
+ ],
+ "0837": [
+  "session",
+  "user",
+  "logoff"
+ ],
+ "0896": [
+  "input",
+  "choice",
+  "batch"
+ ],
+ "0931": [
+  "log",
+  "manage",
+  "performance"
+ ],
+ "0935": [
+  "send",
+  "user",
+  "message"
+ ],
+ "0936": [
+  "session",
+  "user",
+  "reset"
+ ],
+ "0937": [
+  "session",
+  "terminal",
+  "connect"
+ ],
+ "0938": [
+  "disconnect",
+  "session",
+  "terminal"
+ ],
+ "0939": [
+  "session",
+  "terminal",
+  "change"
+ ],
+ "1014": [
+  "view",
+  "list",
+  "show"
+ ],
+ "1018": [
+  "review",
+  "view",
+  "check"
+ ],
+ "1021": [
+  "execute",
+  "rerun",
+  "repeat"
+ ],
+ "1045": [
+  "user",
+  "files",
+  "profile",
+  "backup"
+ ],
+ "1049": [
+  "sessions",
+  "info",
+  "users",
+  "active"
+ ],
+ "1063": [
+  "local",
+  "list",
+  "users",
+  "accounts"
+ ],
+ "1082": [
+  "commands",
+  "list",
+  "previous",
+  "history"
+ ],
+ "1096": [
+  "permissions",
+  "user",
+  "security",
+  "privileges"
+ ],
+ "1137": [
+  "screen",
+  "lock",
+  "secure"
+ ],
+ "1143": [
+  "installed",
+  "uwp",
+  "list",
+  "store apps"
+ ],
+ "0029": [
+  "send",
+  "mail",
+  "email"
+ ],
+ "0030": [
+  "fetch",
+  "download",
+  "request"
+ ],
+ "0031": [
+  "api",
+  "request",
+  "call"
+ ],
+ "1007": [
+  "fetch",
+  "download",
+  "request"
+ ],
+ "1008": [
+  "fetch",
+  "download",
+  "request"
+ ],
+ "1009": [
+  "api",
+  "request",
+  "call"
+ ],
+ "0013": [
+  "run",
+  "execute",
+  "launch"
+ ],
+ "0091": [
+  "table",
+  "display",
+  "grid"
+ ],
+ "0889": [
+  "set",
+  "title",
+  "window"
+ ],
+ "0893": [
+  "start",
+  "program",
+  "launch"
+ ],
+ "0930": [
+  "monitor",
+  "counter",
+  "performance"
+ ],
+ "1027": [
+  "table",
+  "display",
+  "grid"
+ ],
+ "1156": [
+  "windows",
+  "list",
+  "open",
+  "apps running"
+ ]
+}

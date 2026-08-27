@@ -146,6 +146,11 @@ TIER_A_TO_WCL_CMDLETS: Dict[str, FrozenSet[str]] = {
     "FIND_FILES_BY_CONTENT": frozenset({"Get-ChildItem"}),
     "GET_CLIPBOARD": frozenset({"Get-Clipboard"}),
     "SET_CLIPBOARD": frozenset({"Set-Clipboard"}),
+    # kind="api" like GET_WEATHER/CONVERT_SELECTED_FILE above -- plain
+    # Python (clip_qr.py), no PowerShell cmdlet involved at all.
+    "SAVE_CLIPBOARD_TO_FILE": frozenset(),
+    "GENERATE_QR_CODE": frozenset(),
+    "SCAN_QR_CODE": frozenset(),
     "WAIT_FOR_PROCESS": frozenset({"Wait-Process"}),
     "FIND_PROCESS": frozenset({"Get-Process"}),
     "TOP_PROCESSES_BY_CPU": frozenset({"Get-Process"}),

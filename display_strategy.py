@@ -50,8 +50,9 @@ function's docstring for why).
 
 from __future__ import annotations
 
+import re
 from enum import Enum
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 class DisplayStrategy(Enum):
@@ -96,6 +97,9 @@ INTENT_DISPLAY_MAP = {
     # ── Clipboard ──
     "GET_CLIPBOARD": DisplayStrategy.INFO,
     "SET_CLIPBOARD": DisplayStrategy.DONE,
+    "SAVE_CLIPBOARD_TO_FILE": DisplayStrategy.DONE,
+    "GENERATE_QR_CODE": DisplayStrategy.DONE,
+    "SCAN_QR_CODE": DisplayStrategy.INFO,
 
     # ── Processes / services ──
     "PROCESS_LIST": DisplayStrategy.INFO,
@@ -211,6 +215,72 @@ _KIND_FALLBACK = {
 _API_FAILURE_PREFIX = "Hmm, that didn't work."
 
 
+# ─── raw PowerShell table -> readable paragraph ────────────────────────────
+#
+# Widget UI pass: the persistent INFO card (see toki_desktop_mark.py's
+# show_result()) used to show `collected_output` completely unmodified --
+# for anything built on `Get-ChildItem`/`Select-Object` (LIST_FILES,
+# FIND_FILES, PROCESS_LIST, ...) that's PowerShell's own fixed-width
+# `Format-Table` layout: a header row, a dashed separator row, then
+# whitespace-column-aligned data rows. That's fine in a monospace
+# terminal; inside a proportional-font card it just reads as a jumble of
+# misaligned whitespace, exactly the "raw powershell output" this was
+# asked not to show. This reformats that one specific, very common shape
+# into a plain bulleted paragraph. Anything that ISN'T that shape --  a
+# single value, a sentence, JSON, a already-prose message -- is returned
+# completely unchanged; this only ever reformats a table it can already
+# parse cleanly, never guesses at one it can't.
+_PS_DASH_LINE_RE = re.compile(r"^-{2,}(?:\s+-{2,})*$")
+
+
+def _prettify_powershell_output(text: str) -> str:
+    lines = text.splitlines()
+    dash_idx = None
+    for i, line in enumerate(lines):
+        if i > 0 and _PS_DASH_LINE_RE.match(line.strip()):
+            dash_idx = i
+            break
+    if dash_idx is None:
+        return text
+
+    header_line = lines[dash_idx - 1]
+    dash_line = lines[dash_idx]
+    data_lines = [ln for ln in lines[dash_idx + 1:] if ln.strip()]
+    if not data_lines:
+        return text
+
+    # Column boundaries come straight from the dash line's own runs --
+    # this is exactly how PowerShell laid the table out, so it stays
+    # correct even when a value itself contains spaces (a filename with
+    # spaces in it, for instance) in a way a plain whitespace-split
+    # wouldn't.
+    col_spans = [m.span() for m in re.finditer(r"-{2,}", dash_line)]
+    if not col_spans:
+        return text
+
+    def _slice_cols(line: str) -> List[str]:
+        cells = []
+        for idx, (start, end) in enumerate(col_spans):
+            end = end if idx < len(col_spans) - 1 else len(line)
+            cells.append(line[start:end].strip())
+        return cells
+
+    headers = _slice_cols(header_line)
+    rows = [_slice_cols(ln) for ln in data_lines]
+
+    bullets = []
+    for row in rows:
+        parts = [f"{h}: {v}" for h, v in zip(headers, row) if v]
+        if parts:
+            bullets.append("• " + "  —  ".join(parts))
+
+    if not bullets:
+        return text
+
+    count_note = f"{len(bullets)} item{'s' if len(bullets) != 1 else ''}:\n\n"
+    return count_note + "\n".join(bullets)
+
+
 def classify_display(
     result: Optional[dict],
     collected_output: str = "",
@@ -264,7 +334,7 @@ def classify_display(
 
     if kind == "powershell":
         if timed_out:
-            partial = collected_output.strip()
+            partial = _prettify_powershell_output(collected_output.strip())
             note = "Still running -- taking longer than expected. Showing what's come back so far:"
             text = f"{note}\n\n{partial}" if partial else f"{note} (nothing yet)"
             return DisplayStrategy.INFO, text
@@ -281,7 +351,7 @@ def classify_display(
         if strategy == DisplayStrategy.INFO:
             # Same reasoning: base_text is just "Done." here too, never
             # the real listing/reading/etc. -- don't fall back to it.
-            text = collected_output.strip() or "(no output)"
+            text = _prettify_powershell_output(collected_output.strip()) or "(no output)"
             return DisplayStrategy.INFO, text
         return DisplayStrategy.DONE, base_text or "Done."
 

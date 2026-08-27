@@ -64,6 +64,31 @@ _WHISPER_MODEL = "tiny.en"
 
 _extend_event: threading.Event = threading.Event()
 
+# ── hold-to-talk support ──────────────────────────────────────────────────
+#
+# Two distinct ways to use Ctrl+K, both handled by toki_desktop_mark.py's
+# hotkey listener and reported here:
+#   - a quick tap (press, release almost immediately): the pipeline keeps
+#     doing exactly what it always did -- capture until SILENCE_HANGOVER_S
+#     of real silence, no change to that path at all.
+#   - a genuine press-and-hold (release comes noticeably later): the key
+#     being physically down is itself the "keep listening" signal, so a
+#     natural mid-sentence pause must NOT end the recording early the way
+#     it would for a tap -- and releasing the key should end it
+#     immediately, without waiting out the normal hangover.
+#
+# _key_held tracks "is Ctrl+K physically down right now" -- set/cleared on
+# every press/release regardless of how long it turns out to have been
+# held, since that's only knowable in hindsight at release time (see
+# toki_desktop_mark.py's on_release, which decides tap-vs-hold from the
+# elapsed duration and only calls force_stop_and_transcribe() for a real
+# hold). While True, _record_and_transcribe()'s silence-hangover check is
+# suspended -- a tap clears this again within well under
+# SILENCE_HANGOVER_S in virtually every real press, so this never changes
+# tap behavior in practice.
+_key_held: threading.Event = threading.Event()
+_force_stop_event: threading.Event = threading.Event()
+
 
 def extend_listening() -> None:
     """
@@ -71,6 +96,26 @@ def extend_listening() -> None:
     Callable from any thread.  No-op if the pipeline is not capturing.
     """
     _extend_event.set()
+
+
+def set_key_held(held: bool) -> None:
+    """Called by toki_desktop_mark's hotkey listener on every Ctrl+K
+    press/release. While held, the silence-hangover auto-stop below is
+    suspended so a deliberate hold-to-talk press isn't cut short by an
+    ordinary pause between sentences. Callable from any thread."""
+    if held:
+        _key_held.set()
+    else:
+        _key_held.clear()
+
+
+def force_stop_and_transcribe() -> None:
+    """Called on a hold-to-talk RELEASE (toki_desktop_mark's on_release,
+    only once the elapsed press duration crosses its hold-vs-tap
+    threshold) to end the current recording right now instead of waiting
+    out the normal silence hangover. No-op if nothing is currently
+    capturing. Callable from any thread."""
+    _force_stop_event.set()
 
 
 # ── Silero VAD wrapper ───────────────────────────────────────────────────────
@@ -288,6 +333,7 @@ class HotkeyVoicePipeline(QThread):
 
         self._vad.reset()
         _extend_event.clear()
+        _force_stop_event.clear()
 
         recorded           = np.zeros(0, dtype=np.int16)
         vad_buf            = np.zeros(0, dtype=np.int16)
@@ -300,6 +346,19 @@ class HotkeyVoicePipeline(QThread):
         while not self._stop_flag.is_set():
             now = time.monotonic()
 
+            # hold-to-talk release: end right now rather than waiting out
+            # the normal silence hangover (see force_stop_and_transcribe()'s
+            # docstring). A release before any speech was even heard is
+            # treated the same as the ordinary no-speech timeout below,
+            # not as an utterance to transcribe.
+            if _force_stop_event.is_set():
+                _force_stop_event.clear()
+                if heard_speech:
+                    break
+                self._capturing = False
+                self.no_speech_detected.emit()
+                return
+
             # hard cap
             if now - session_start_t > MAX_UTTERANCE_S:
                 break
@@ -310,8 +369,13 @@ class HotkeyVoicePipeline(QThread):
                 self.no_speech_detected.emit()
                 return
 
-            # silence hangover (only after we've heard something)
-            if heard_speech and (now - last_speech_t) > SILENCE_HANGOVER_S:
+            # silence hangover (only after we've heard something) -- held
+            # off entirely while the hotkey is still physically down (a
+            # deliberate hold-to-talk press), since a pause mid-sentence
+            # while still holding must not end the recording; see
+            # set_key_held()'s docstring for why this never changes a
+            # plain tap's behavior in practice.
+            if heard_speech and (now - last_speech_t) > SILENCE_HANGOVER_S and not _key_held.is_set():
                 # Check if Ctrl+K extended us
                 if _extend_event.is_set():
                     _extend_event.clear()

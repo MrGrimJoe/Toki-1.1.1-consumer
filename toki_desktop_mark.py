@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import Callable, List, Optional, Tuple
 
 from PyQt6.QtCore import (
@@ -102,6 +103,17 @@ ANIM_MS    = 500   # slide animation duration
 ACTIVE_TOP = 8     # active mark sits 8 px below screen top
 
 LONG_PRESS_MS  = 350   # hold-to-drag threshold (below this = a click, not a drag)
+HOLD_TO_TALK_MS = 350  # Ctrl+K hold-vs-tap threshold: held this long or
+                        # longer before release = "listen for as long as
+                        # I'm holding you down" (voice_pipeline.py's
+                        # force_stop_and_transcribe() fires on release);
+                        # shorter = an ordinary tap, unchanged behavior
+                        # (release does nothing, silence auto-detection
+                        # decides when the utterance is over). Same value
+                        # as LONG_PRESS_MS purely for a consistent feel
+                        # across the app's two separate "was that a tap or
+                        # a hold" decisions -- not because the two are
+                        # otherwise related.
 REPLY_SHOW_MS  = 3000  # how long the reply bubble stays visible before fading
 HOVER_INTENT_MS = 180  # dwell time before an idle-hover actually expands the
                         # notch -- without this, brushing past the 6px-tall
@@ -1390,6 +1402,13 @@ def _run_listener() -> None:
 
     ctrl_held = False
 
+    # Guards OS key-repeat: holding a key down fires on_press repeatedly
+    # (dozens of times a second on some systems) -- only the FIRST of
+    # those, the actual physical press, should start a press-duration
+    # timer or tell voice_pipeline the key just went down.
+    k_currently_down = False
+    k_press_t: Optional[float] = None
+
     # 'K' virtual-key code (Windows). Deliberately NOT matching on
     # key.char: pynput reports the *control character* Windows generates
     # for Ctrl+<letter> combos (Ctrl+K -> '\x0b', not 'k'), so
@@ -1399,17 +1418,46 @@ def _run_listener() -> None:
     VK_K = 0x4B
 
     def on_press(key):
-        nonlocal ctrl_held
+        nonlocal ctrl_held, k_currently_down, k_press_t
         if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
             ctrl_held = True
             return
         if ctrl_held and getattr(key, "vk", None) == VK_K:
+            if not k_currently_down:
+                # real physical press, not OS auto-repeat -- start timing
+                # it so on_release can tell a tap from a hold-to-talk
+                # press (see HOLD_TO_TALK_MS above).
+                k_currently_down = True
+                k_press_t = time.monotonic()
+                try:
+                    from voice_pipeline import set_key_held
+                    set_key_held(True)
+                except Exception:
+                    pass
             _bridge.hotkey.emit()
 
     def on_release(key):
-        nonlocal ctrl_held
+        nonlocal ctrl_held, k_currently_down, k_press_t
         if key in (kb.Key.ctrl_l, kb.Key.ctrl_r):
             ctrl_held = False
+            return
+        if getattr(key, "vk", None) == VK_K and k_currently_down:
+            k_currently_down = False
+            held_ms = (time.monotonic() - k_press_t) * 1000.0 if k_press_t is not None else 0.0
+            k_press_t = None
+            try:
+                from voice_pipeline import set_key_held, force_stop_and_transcribe
+                set_key_held(False)
+                if held_ms >= HOLD_TO_TALK_MS:
+                    # a genuine hold-to-talk press just ended -- stop
+                    # listening right now rather than waiting out the
+                    # normal silence hangover. A quick tap (held_ms below
+                    # the threshold) does nothing here at all: the
+                    # pipeline keeps auto-detecting silence exactly as it
+                    # always has.
+                    force_stop_and_transcribe()
+            except Exception:
+                pass
 
     with kb.Listener(on_press=on_press, on_release=on_release, suppress=False) as listener:
         listener.join()

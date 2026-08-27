@@ -163,8 +163,8 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "description": "Show free/used space on available drives",
         "kind": "powershell",
         "template": "Get-PSDrive -PSProvider FileSystem | "
-                    "Select-Object Name,@{{N='UsedGB';E={{[math]::Round($_.Used/1GB,1)}}}},"
-                    "@{{N='FreeGB';E={{[math]::Round($_.Free/1GB,1)}}}}",
+                    "Select-Object Name,@{N='UsedGB';E={[math]::Round($_.Used/1GB,1)}},"
+                    "@{N='FreeGB';E={[math]::Round($_.Free/1GB,1)}}",
         "slots": [],
         "reversible": False,
     },
@@ -195,7 +195,7 @@ INTENTS: Dict[str, Dict[str, Any]] = {
     "NETWORK_INFO": {
         "description": "Show local network/IP info",
         "kind": "powershell",
-        "template": "Get-NetIPAddress | Where-Object {{$_.AddressFamily -eq 'IPv4'}} "
+        "template": "Get-NetIPAddress | Where-Object {$_.AddressFamily -eq 'IPv4'} "
                     "| Select-Object IPAddress,InterfaceAlias",
         "slots": [],
         "reversible": False,

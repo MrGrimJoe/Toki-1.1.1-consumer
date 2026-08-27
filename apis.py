@@ -346,10 +346,22 @@ class FileConvertAPI:
         sel = get_selection_context().get_selected()
         return sel["path"] if sel else None
 
-    def convert_selected(self, target_format: str = "") -> str:
-        path = self._current_selection_path()
+    def convert_selected(self, target_format: str = "", explicit_source: str = "") -> str:
+        # BETA 0.3.66 (widget-context merge session): confirmed live, a
+        # real usability gap -- this method had no way to accept an
+        # explicit filename at all, so "convert notes.txt to markdown"
+        # (completely unambiguous) always fell through to "nothing is
+        # selected right now" unless the user had ALSO just dragged that
+        # exact file onto TOKI. explicit_source (from extractor.py's
+        # _extract_convert_source(), already resolved to a real sandboxed
+        # path) is tried first; falls back to the existing drag-drop
+        # selection_context lookup exactly as before when no filename was
+        # typed. Deliberately does NOT touch orchestrator._last_touched --
+        # see SELECTION_ELIGIBLE_INTENTS's docstring in extractor.py for
+        # why that separation is intentional and stays as-is here.
+        path = explicit_source or self._current_selection_path()
         if not path:
-            return "Nothing is selected right now -- drag a file onto TOKI first."
+            return "Nothing is selected right now -- drag a file onto TOKI first, or name the file directly (e.g. \"convert notes.txt to markdown\")."
         if not target_format:
             return "Couldn't convert: I need to know what format to convert to."
         try:
@@ -437,8 +449,20 @@ class VideoDownloadAPI:
 
     def _download(self, url: str, audio_only: str) -> str:
         try:
-            from video_downloader import download_video
+            from video_downloader import download_video, ffmpeg_available
             out = download_video(url, audio_only=bool(audio_only))
+            # BETA 0.3.67: video downloads no longer HARD-require ffmpeg
+            # (see FfmpegNotFoundError's docstring in video_downloader --
+            # a plain "best" pre-muxed stream needs no merging), but a
+            # merge-capable machine usually gets a higher resolution.
+            # Flag that trade-off here rather than silently under-
+            # delivering with no explanation.
+            if not audio_only and not ffmpeg_available():
+                return (
+                    f"Downloaded to {out} (installed ffmpeg would let me "
+                    "grab a higher resolution -- this one used the "
+                    "single best pre-combined stream available instead)."
+                )
             return f"Downloaded to {out}"
         except Exception as e:
             return f"Couldn't download that video: {e}"

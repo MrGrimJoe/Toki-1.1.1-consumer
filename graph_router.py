@@ -204,6 +204,24 @@ def normalize(text: str) -> str:
     text = text.lower().strip()
     for suffix in _STRIPPED_SUFFIXES:
         text = text.replace(suffix, " ")
+    # BETA 0.3.69: strip apostrophes (straight + both curly variants)
+    # outright, BEFORE the general punctuation regex below -- that regex
+    # turns any non-word character into a SPACE, which splits a
+    # contraction like "what's" into two tokens, "what" + "s", instead of
+    # collapsing it to "whats". "s" is not a stopword, so it survives as
+    # a spurious, zero-signal content word, AND the query loses the
+    # actual "whats" token entirely -- meaning "what's my IP address"
+    # (in a phrasing bank) and "whats my ip address" (a completely
+    # ordinary paraphrase) produced DIFFERENT, barely-overlapping content
+    # word sets even though a human reader would call them identical.
+    # Found via test_routing_generalization_sweep.py's NETWORK_INFO gap;
+    # confirmed this exact inconsistency (contraction vs. spelled-out
+    # form of the SAME word) recurs 70+ times across tier_a_phrasings.py
+    # ("what's"/"whats", "it's"/"its", "don't"/"dont", "can't"/"cant"),
+    # so this is a normalize()-level fix, not a per-phrasing patch.
+    # Deleting (not spacing) the apostrophe converges both spellings onto
+    # the single form most of this corpus already uses.
+    text = text.replace("'", "").replace("\u2019", "").replace("\u2018", "")
     # Replace (not delete) anything that isn't a word/space/brace/hyphen --
     # deleting silently glued separators together (e.g. "folder/directory"
     # became "folderdirectory", one useless token instead of two matchable

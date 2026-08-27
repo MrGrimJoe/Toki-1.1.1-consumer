@@ -96,3 +96,10 @@ yt-dlp>=2024.1.0
 # through to the address-bar strategy, same "optional dependency, clear
 # degrade" posture as text_backend.py's pyyaml/toml handling above.
 # websocket-client>=1.7.0
+
+# clip_qr.py's GENERATE_QR_CODE / SCAN_QR_CODE -- OPTIONAL, same
+# "name the exact missing tool" graceful-degrade posture as pyyaml/toml
+# above. Not required for TOKI to run; missing either just means those
+# two specific requests report what's missing instead of silently failing.
+# qrcode>=7.4.2
+# pyzbar>=0.1.9

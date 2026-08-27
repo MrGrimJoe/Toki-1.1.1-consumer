@@ -145,6 +145,30 @@ INTENTS_EXTENDED: Dict[str, Dict[str, Any]] = {
         "slots": ["value"],
         "reversible": False,
     },
+    "SAVE_CLIPBOARD_TO_FILE": {
+        "description": "Save the current clipboard text to a file (defaults to a timestamped .md file on the Desktop)",
+        "kind": "api",
+        "api": "clipboardfile",
+        "action": "save_clipboard_to_file",
+        "slots": ["filename", "extension"],
+        "reversible": False,
+    },
+    "GENERATE_QR_CODE": {
+        "description": "Generate a QR code image for some text/link (falls back to the current clipboard contents if nothing else is given)",
+        "kind": "api",
+        "api": "qrcode",
+        "action": "generate_qr_code",
+        "slots": ["content", "filename"],
+        "reversible": False,
+    },
+    "SCAN_QR_CODE": {
+        "description": "Read/decode the QR code in the currently selected image file",
+        "kind": "api",
+        "api": "qrcode",
+        "action": "scan_qr_code",
+        "slots": [],
+        "reversible": False,
+    },
 
     # ── Process ──────────────────────────────────────────────────────────────
     "WAIT_FOR_PROCESS": {

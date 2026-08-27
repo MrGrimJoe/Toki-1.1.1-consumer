@@ -44,12 +44,33 @@ swap only replaces the MATCHING quality, not the dispatchability boundary.
 """
 import re
 import difflib
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import kuzu
 
 DB_PATH = Path(__file__).parent / "wcl_kg" / "windows_commands_db"
+
+# BETA 0.3.64 (this session): needed for _leading_word_related() below --
+# wcl_kg/vocab.py already maintains a real, curated verb-synonym mapping
+# (VERB_CLUSTERS/find_leading_cluster) built for the alias-generation
+# pipeline itself, which is a much more reliable signal for "are these
+# two leading words actually the same idea" than raw character-overlap
+# ever can be for short words -- see that function's use below for the
+# concrete real bug (mute/update coincidentally scoring 0.6 on
+# SequenceMatcher despite being unrelated) that motivated reusing it here
+# instead of tuning yet another standalone threshold. Import is
+# best-effort and __file__-relative, same pattern as DB_PATH above, so a
+# missing/moved wcl_kg degrades to the plain ratio fallback rather than
+# crashing the whole resolver.
+try:
+    _wcl_kg_dir = str(Path(__file__).parent / "wcl_kg")
+    if _wcl_kg_dir not in sys.path:
+        sys.path.insert(0, _wcl_kg_dir)
+    from vocab import find_leading_cluster as _find_leading_cluster
+except Exception:
+    _find_leading_cluster = None
 
 FILLER_PREFIXES = [
     "please ", "could you ", "can you ", "would you ", "i want to ",
@@ -130,6 +151,124 @@ def _abbreviation_variants(q: str) -> List[str]:
     return out
 
 
+# BETA 0.3.64 (this session, real-data stress test 2026-08-22): shared
+# stopword list for Tier 9 (_content_words / _containment_resolve below)
+# and the bracket-resolve safety check in _bracket_resolve(). Small and
+# fixed on purpose -- same posture as ABBREVIATION_PAIRS above -- this
+# only strips words that are near-never load-bearing for picking a
+# command (articles/prepositions), never anything that could itself be
+# a real object noun.
+STOPWORDS = frozenset({
+    "the", "a", "an", "of", "for", "on", "in", "my", "this", "that",
+    "to", "is", "are", "with", "and", "or", "at", "by", "me",
+})
+
+# BETA 0.3.64 (this session): confirmed directly against real alias rows
+# (e.g. every one of Get-Volume's aliases is "<verb> me the volume" for
+# verb in this exact set) that this dataset uses these words purely as
+# interchangeable "retrieve"-synonym padding, not as real distinguishing
+# content -- see the ambiguity_groups TEMPLATE_GENERATED_ALIASES gap the
+# rebuilt KB already flagged for the same underlying reason. The problem:
+# several of these words (get, list, show, print, status) are ALSO real,
+# meaningful nouns/objects elsewhere in this same command surface ("print
+# spooler service", "get" as a verb prefix, a task's "status"), so a
+# containment match can't tell "print" the padding-verb from "print" the
+# real word without this list -- confirmed via a real false match this
+# session: "stop the print spooler service" collided with Get-Service's
+# padding-verb alias "print me the service" purely because both strings
+# contain the word "print". Excluded ONLY from the ALIAS side's word
+# count in Tier 9 (_containment_resolve), never from the query side and
+# never from any other tier's literal alias-text matching -- this is a
+# heuristic to stop over-general padding-verb aliases from qualifying as
+# tier 9's required "2 real distinguishing words", not a claim that
+# these words never mean anything.
+ALIAS_PADDING_VERBS = frozenset({
+    "display", "list", "show", "output", "print", "view", "read",
+    "get", "status", "manage", "what", "check",
+})
+
+# BETA 0.3.64 (this session): confirmed a real, dangerous failure mode in
+# Tier 5's fuzzy match -- difflib's SequenceMatcher only measures
+# character-sequence overlap, with zero concept of what a word MEANS, so
+# a harmless read query can land on a destructive command purely by
+# coincidental spelling. Confirmed live: "list all vm switches" scored
+# 0.821 similarity against the real alias "uninstall vm switch" (both
+# strings happen to share a lot of letters -- "list all" vs "uninstall"
+# overlap more than they look like they should), which cleared the 0.82
+# cutoff and returned Remove-VMSwitch for a query that was just asking
+# to LIST switches. These two small sets are used ONLY to veto a tier 5
+# candidate whose own leading word crosses from one of these categories
+# to the other relative to the query's leading word -- never to accept a
+# match, so a false negative here only costs a fallthrough to a weaker
+# tier or UNRESOLVED, never a wrong RESOLVED.
+READ_VERBS = frozenset({"list", "show", "get", "display", "view", "what"})
+DESTRUCTIVE_VERBS = frozenset({
+    "remove", "delete", "uninstall", "clear", "disable", "stop", "wipe",
+    "format", "kill", "clean", "reset", "revoke", "unregister",
+})
+
+
+def _leading_word_related(word_a: str, word_b: str) -> bool:
+    """True if word_a/word_b are plausibly the SAME intended word --
+    either literally, a same-cluster real synonym (via wcl_kg/vocab.py's
+    curated VERB_CLUSTERS, when importable), or a close-enough typo.
+
+    BETA 0.3.64 (this session). Cluster lookup is the PRIMARY signal
+    when available for either word, specifically because raw
+    character-overlap ratio is fooled by short words that coincidentally
+    share letters despite meaning nothing alike -- confirmed real bug:
+    "mute" vs "update" scores 0.6 on SequenceMatcher (both contain
+    "u","t","e" in order) despite being unrelated, which let "mute the
+    volume" (audio) slip through a plain ratio>=0.5 gate and still land
+    on Set-Volume (a destructive DISK command) via its "update the
+    volume" synonym alias, even after the exact "set"/"mute" pair
+    (ratio 0.286) was correctly rejected by that same gate.
+
+    If EITHER word has a recognized cluster, trust that over the ratio:
+    same word or same cluster -> related; a recognized cluster that
+    DIFFERS from the other word's (cluster or lack of one) -> not
+    related, full stop, no ratio fallback -- the vocab already gave a
+    real answer, a coincidental string-shape rhyme doesn't get a second
+    vote.
+
+    Only when NEITHER word is in any known cluster (something outside
+    this domain's curated verb vocabulary entirely) does this fall back
+    to a ratio check -- and a stricter one (0.75, not 0.5) than the
+    first version of this fix used, precisely because that's exactly the
+    situation with no semantic signal to lean on, so it needs to lean
+    harder on the words looking almost identical, not just similar.
+    """
+    if word_a == word_b:
+        return True
+    if _find_leading_cluster is not None:
+        cluster_a = _find_leading_cluster(word_a)
+        cluster_b = _find_leading_cluster(word_b)
+        if cluster_a is not None or cluster_b is not None:
+            if cluster_a is not None and cluster_b is not None:
+                return word_b in cluster_a[1] or word_a in cluster_b[1]
+            return False
+    return difflib.SequenceMatcher(None, word_a, word_b).ratio() >= 0.75
+
+
+def _content_words(tokens: List[str]) -> List[str]:
+    """Tokens with stopwords removed -- used by Tier 9's containment
+    match and the bracket-resolve safety check, both of which need "the
+    real nouns/verbs in this phrase", not every token verbatim.
+
+    Deliberately NOT length-filtered (an earlier version of this
+    function also dropped tokens of length <= 2, matching loose_search's
+    filter -- found and reverted the same session it was written: this
+    domain's vocabulary is full of short, load-bearing words -- "vm",
+    "ip", "os", "pc", "db" -- and stripping them by length alone silently
+    deleted the ONE distinguishing word out of alias phrases like "make a
+    new vm", leaving only generic filler like {"make","new"} behind,
+    which then falsely subset-matched unrelated queries like "make a new
+    FOLDER called test". Stopwords are removed by an explicit fixed list
+    instead, specifically because that risk doesn't apply -- nothing on
+    that list is ever itself a real command object.)"""
+    return [w for w in tokens if w not in STOPWORDS]
+
+
 def _leading_pair_swap(q: str) -> Optional[str]:
     """Given an already-normalize()'d query, swaps ONLY the first two
     tokens (e.g. "bitlocker lock mount point d" -> "lock bitlocker mount
@@ -147,6 +286,25 @@ def _leading_pair_swap(q: str) -> Optional[str]:
 
 def normalize(q: str) -> str:
     q = q.lower().strip()
+    # BETA 0.3.64 (this session): hyphens/underscores MUST become a
+    # space, not just vanish, before the general punctuation strip below.
+    # Found via stress-testing real PowerShell-shaped input: typing an
+    # actual cmdlet name verbatim -- "Get-Volume", "get-service" -- or
+    # any hyphenated compound word with no surrounding whitespace
+    # ("print-spooler service") used to fuse the two halves into one
+    # glued token ("getvolume", "printspooler") once the old
+    # `re.sub(r"[^\w\s]", "", q)` deleted the hyphen outright. That
+    # merged token then never matches any real (space-separated) alias
+    # text at all, and worse, tier 5's difflib fuzzy match doesn't fail
+    # loud -- it just returns whatever a mangled token happens to be
+    # closest to, e.g. "getvolume" landed on Set-Volume, "get-service"
+    # landed on Set-Service. Confirmed via this session's stress test
+    # that this only bit single/two-token queries hard (typing a bare
+    # cmdlet name); longer sentences ("stop the print-spooler service")
+    # mostly survived by luck, since Tier 7's bracket match only looks
+    # at the first/last token and discards the mangled middle anyway --
+    # not something to rely on.
+    q = re.sub(r"[-_]", " ", q)
     q = re.sub(r"[^\w\s]", "", q)
     q = re.sub(r"\s+", " ", q)
     changed = True
@@ -315,7 +473,63 @@ class WCLResolver:
                 out["tier"] = 8
                 return out
 
+        # Tier 9: alias-token-containment match (BETA 0.3.64, this
+        # session -- moved here from inside _resolve_normalized after
+        # finding it was stealing the turn from tiers 6/8 below: those
+        # are only tried when the base pass is UNRESOLVED, and tier 9's
+        # weaker containment guess was turning some queries AMBIGUOUS
+        # before tier 8's much stronger, exact-match-based swap retry
+        # ever got a chance -- e.g. "bitlocker lock mount point D" used
+        # to get a fully-confident tier 8 RESOLVED, but with tier 9
+        # running earlier it got intercepted into a same-answer-but-
+        # lower-confidence AMBIGUOUS instead, for no benefit. Now it's
+        # truly last: every stronger tier (1/3/2/5/7 directly, 6/8 via
+        # retries) has already had first crack, on the original query
+        # AND every abbreviation/swap variant. Only consulted when ALL
+        # of that still comes back UNRESOLVED. See _containment_resolve()
+        # docstring for what this catches and why it can only ever
+        # return AMBIGUOUS, never a bare RESOLVED.
+        containment = self._containment_resolve(q, q.split())
+        if containment is not None:
+            return containment
+
         return result  # original UNRESOLVED, with its own loose_candidates
+
+    def _normalized_alias_index(self) -> Dict[str, List[tuple]]:
+        """Cached normalize(alias_text) -> [(alias_text, command_name,
+        syntax, danger_level, requires_admin, requires_confirmation,
+        category), ...], built once from _all_alias_rows().
+
+        Exists specifically for Tier 1's punctuation fallback below --
+        found via a full sweep of all 13,780 real aliases this session:
+        normalize() strips ALL punctuation from the QUERY side (re.sub
+        r"[^\\w\\s]"), but a small, real family of stored alias text
+        (confirmed: 68 aliases across 22 "mstsc /flag" commands --
+        "mstsc /admin", "mstsc /console", etc.) still has literal
+        punctuation in it. Tier 1's exact-match graph query compares the
+        normalized query against that raw, un-normalized text, so those
+        68 aliases could never match ANY phrasing at all, and the query
+        was instead falling through to a shorter, wrong prefix match
+        ("mstsc" alone) via tier 2. Skips any alias whose OWN normalized
+        form is empty or under 2 chars -- specifically to exclude
+        symbol-only aliases like "%" or "?" (PowerShell's ForEach-Object/
+        Where-Object shorthands), which normalize() reduces to "" and
+        which would otherwise all collide on that one empty key. Those
+        two remain a known, separate, unrecoverable gap (normalize()
+        would have to stop stripping punctuation entirely to fix them,
+        which risks every other tier that relies on it) -- not silently
+        papered over by this index.
+        """
+        if not hasattr(self, "_norm_alias_idx_cache") or self._norm_alias_idx_cache is None:
+            idx: Dict[str, List[tuple]] = {}
+            for row in self._all_alias_rows():
+                alias_text = row[0]
+                key = normalize(alias_text)
+                if len(key) < 2:
+                    continue
+                idx.setdefault(key, []).append(row)
+            self._norm_alias_idx_cache = idx
+        return self._norm_alias_idx_cache
 
     def _resolve_normalized(self, q: str, original_query: Optional[str] = None) -> Dict[str, Any]:
         """Tiers 1-5, operating on an already-normalize()'d query string.
@@ -358,6 +572,26 @@ class WCLResolver:
             # results, so it never got a chance to fire. Now (name, syntax,
             # danger_level) so the guard can see it.
             return {"status": "AMBIGUOUS", "tier": 1, "candidates": [(r[0], r[1], r[2]) for r in rows]}
+
+        # Tier 1b: punctuation-normalized fallback (BETA 0.3.64, this
+        # session). Only reached when the raw exact-match query above
+        # found NOTHING -- existing behavior for every alias without
+        # stray punctuation is completely unchanged, since this never
+        # runs otherwise. See _normalized_alias_index() docstring for
+        # exactly what this catches ("mstsc /admin" and its 21 sibling
+        # commands) and why it deliberately can't catch everything.
+        norm_rows = self._normalized_alias_index().get(q)
+        if norm_rows:
+            distinct = list({r[1] for r in norm_rows})
+            if len(distinct) == 1:
+                return self._resolved(1, norm_rows[0][1:])
+            picked = {}
+            for r in norm_rows:
+                picked[r[1]] = r[1:]
+            return {
+                "status": "AMBIGUOUS", "tier": 1,
+                "candidates": [(r[0], r[1], r[2]) for r in picked.values()],
+            }
 
         # Tier 3: SynonymOf 1-hop from any recognized leading token
         tokens = q.split()
@@ -434,6 +668,113 @@ class WCLResolver:
         # Tier 5: fuzzy near-miss against real alias text
         close = difflib.get_close_matches(q, self.all_aliases(), n=3, cutoff=0.82)
         if close:
+            # BETA 0.3.64 (this session): content-completeness pre-pass,
+            # ahead of the category/leading-word vetoes below. Real bug
+            # this fixes: "check windows defender status" had TWO real
+            # candidates clear the 0.82 cutoff -- the correct one, "show
+            # windows defender status" (0.877, contains the query's one
+            # actually-distinctive word "defender"), and a wrong one,
+            # "check windows update status" (0.821, MISSING "defender"
+            # entirely, substituting "update"). The leading-word veto
+            # alone made this worse, not better: it trivially keeps
+            # "check windows update status" (literally same leading word
+            # as the query) while correctly-but-unhelpfully rejecting
+            # "show windows defender status" over a real but, in this
+            # exact context, beside-the-point verb-cluster mismatch
+            # ("check" clusters with verify/diagnose, "show" with
+            # display/get in wcl_kg/vocab.py -- a fair distinction in
+            # general, just not the thing that actually separates these
+            # two candidates). A candidate that's MISSING one of the
+            # query's own real content words, when another candidate
+            # has it exactly, is worse evidence than a borderline verb
+            # mismatch -- so this counts real (padding-stripped) missing
+            # words per candidate and keeps only the candidates tied for
+            # fewest.
+            q_content = set(_content_words(tokens)) - ALIAS_PADDING_VERBS
+            def _symmetric_diff(alias_text: str) -> int:
+                # BETA 0.3.64 (this session): symmetric, not one-
+                # directional. An earlier version of this only counted
+                # words the QUERY was missing from the alias, which
+                # correctly preferred "show windows defender status"
+                # over "check windows update status" for the Defender
+                # case above -- but it never penalized an alias for
+                # introducing EXTRA concepts the query never asked for.
+                # Real case found testing this same session: "print the
+                # network adapter list" scored a "perfect" (0 missing)
+                # one-directional match against "print me the vm network
+                # adapter acl" purely because it contains every word the
+                # query has -- plus two extra, meaningfully different
+                # concepts ("vm", "acl") the query never mentioned at
+                # all, silently narrowing a general adapter-listing
+                # request down to a VM-scoped ACL command. Counting the
+                # full symmetric difference in both directions still
+                # prefers an exact/near-exact match (0 either way) but no
+                # longer rewards a candidate just for being a superset --
+                # it now correctly prefers a same-family candidate with
+                # fewer bolted-on extra words when the truly matching one
+                # (a plain, non-VM-scoped adapter alias) isn't in the
+                # fuzzy candidate pool at all.
+                a_content = set(_content_words(alias_text.split())) - ALIAS_PADDING_VERBS
+                return len(q_content - a_content) + len(a_content - q_content)
+            if q_content:
+                scored = [(c, _symmetric_diff(c)) for c in close]
+                best = min(n for _, n in scored)
+                close = [c for c, n in scored if n == best]
+            else:
+                best = None
+
+            # Safety veto: reject any candidate whose own leading word
+            # crosses categories with the query's leading word (read <->
+            # destructive). This check is ABSOLUTE -- unlike the
+            # leading-word-relatedness check further below, a perfect
+            # content-word match never overrides it, because a query
+            # that's clearly asking to READ something landing on a
+            # DESTRUCTIVE command is the one class of Tier 5 mistake this
+            # codebase can't tolerate regardless of how well the rest of
+            # the words line up. See READ_VERBS/DESTRUCTIVE_VERBS above
+            # for the real bug this fixes ("list all vm switches" ->
+            # Remove-VMSwitch, purely from character-overlap luck).
+            q_lead = tokens[0] if tokens else ""
+            def _category_safe(alias_text: str) -> bool:
+                a_lead = alias_text.split()[0] if alias_text else ""
+                if q_lead in READ_VERBS and a_lead in DESTRUCTIVE_VERBS:
+                    return False
+                if q_lead in DESTRUCTIVE_VERBS and a_lead in READ_VERBS:
+                    return False
+                return True
+            close = [c for c in close if _category_safe(c)]
+
+            # Leading-word-relatedness veto: general backstop alongside
+            # the category veto above. Real bug found: "mute the volume"
+            # (audio) scored 0.828 whole-string similarity against the
+            # real alias "set the volume" (Set-Volume -- a DESTRUCTIVE
+            # disk-partition command, confirmed via its own danger_level
+            # field), high enough to clear the 0.82 cutoff purely because
+            # both strings share the long suffix "the volume" while the
+            # one word that actually carries the meaning ("mute" vs
+            # "set") gets diluted into a small fraction of the overall
+            # ratio. _leading_word_related() uses wcl_kg/vocab.py's
+            # curated VERB_CLUSTERS as its primary signal (falls back to
+            # a strict 0.75 ratio only when neither word is clustered) --
+            # see that function's own docstring for why raw ratio alone
+            # isn't trustworthy here (mute/update coincidentally scores
+            # 0.6 despite being unrelated).
+            #
+            # UNLIKE the category veto above, this one is skipped for a
+            # candidate that is BOTH the unique surviving candidate AND a
+            # perfect (0 missing) content-word match -- see the Windows
+            # Defender case in this block's own opening comment for
+            # exactly why: a real content-word mismatch is stronger,
+            # more specific evidence than a verb-cluster distinction that
+            # doesn't hold up in this particular phrasing. Only applies
+            # when q_content was non-empty and unique; with 0 or 2+ still
+            # in the running, this veto still applies to every one of
+            # them, same as before this session.
+            if q_content and best == 0 and len(close) == 1:
+                pass
+            else:
+                close = [c for c in close if q_lead == (c.split()[0] if c else "") or _leading_word_related(q_lead, c.split()[0] if c else "")]
+        if close:
             rows = []
             for alias_text in close:
                 res = self.conn.execute(
@@ -445,6 +786,92 @@ class WCLResolver:
                     rows.append(res.get_next())
             distinct = list({(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows})
             if len(distinct) == 1:
+                # BETA 0.3.65 (this session): pre-emption check, confirmed
+                # via a real live case -- "print the network adapter list"
+                # was landing here as a confident single-candidate RESOLVED
+                # (Get-VMNetworkAdapterAcl) even though a genuinely BETTER,
+                # non-VM-scoped candidate ("list network adapters" ->
+                # Get-NetAdapter, an exact content-word match with zero
+                # extra concepts) exists in the graph. The problem was
+                # never the scoring inside `close` -- it's that difflib's
+                # 0.82 whole-string cutoff never let the better candidate
+                # INTO the pool at all (its raw character-overlap ratio
+                # against the query is ~0.75, just under cutoff, despite
+                # being the semantically exact match), so the symmetric-
+                # diff re-ranking above was only ever choosing among
+                # options that were all, to varying degrees, wrong.
+                #
+                # Fix: before trusting a single `close`-pool survivor,
+                # scan the FULL alias table (already cached via
+                # _all_alias_rows(), same cost class as tier 9) for any
+                # alias whose padding-stripped content words are an EXACT
+                # match for the query's -- not merely fuzzy-close -- for a
+                # DIFFERENT command. That candidate never had to clear the
+                # 0.82 cutoff to prove itself: exact content-word equality
+                # is strictly stronger evidence than whole-string character
+                # overlap. If found, this tier can no longer claim a
+                # confident single answer -- fall to AMBIGUOUS with both,
+                # same fail-safe posture as every other veto in this tier.
+                # Never used to manufacture a NEW RESOLVED on its own, only
+                # to withhold a wrong one.
+                winner_name = distinct[0][0]
+                if q_content:
+                    # Fold trivial plurals (word/word+"s") AND known
+                    # short/long abbreviation pairs before the equality
+                    # check.
+                    #
+                    # Plural fold found while verifying this fix:
+                    # "network adapter" (query, singular) vs "network
+                    # adapters" (real alias, plural) are the same concept
+                    # but compared unequal as bare sets, which silently
+                    # defeated the whole check for exactly the case it was
+                    # written for. Only strips a bare trailing "s" on
+                    # words longer than 3 chars (so "vm"/"os"/"ip"-class
+                    # short words are never touched), never a general
+                    # stemmer -- same narrow, hand-checked posture as
+                    # every other heuristic in this file.
+                    #
+                    # Abbreviation fold added after a second live case:
+                    # "net adjust adapter" -- fed through Tier 6's own
+                    # net->network substitution, landing on "network
+                    # adjust adapter" -- was STILL confidently resolving
+                    # wrong (to Get-NetAdapter via the unrelated "network
+                    # net adapter" alias) instead of the correct, genuinely
+                    # destructive Set-NetAdapter ("adjust net adapter"),
+                    # because the correct alias uses "net" while the
+                    # substituted query now says "network" -- an exact-set
+                    # check with no abbreviation-awareness treated those as
+                    # different content and missed it. Reuses
+                    # ABBREVIATION_PAIRS (the exact same hand-reviewed,
+                    # frequency-confirmed list Tier 6 already trusts) to
+                    # canonicalize each word to its short form before
+                    # comparing -- deliberately the SAME list, not a new
+                    # one, so this can't disagree with what Tier 6 already
+                    # considers interchangeable.
+                    _SHORT_FORM = {long: short for short, long in ABBREVIATION_PAIRS}
+                    def _fold(words):
+                        out = set()
+                        for w in words:
+                            w = _SHORT_FORM.get(w, w)
+                            if len(w) > 3 and w.endswith("s"):
+                                w = w[:-1]
+                            out.add(w)
+                        return frozenset(out)
+                    q_content_folded = _fold(q_content)
+                    exact_content_matches = {}
+                    for alias_text2, name2, syntax2, danger2, admin2, confirm2, category2 in self._all_alias_rows():
+                        if name2 == winner_name:
+                            continue
+                        a_content2 = set(_content_words(alias_text2.split())) - ALIAS_PADDING_VERBS
+                        if a_content2 and _fold(a_content2) == q_content_folded:
+                            exact_content_matches[name2] = (name2, syntax2, danger2, admin2, confirm2, category2)
+                    if exact_content_matches:
+                        all_candidates = {winner_name: distinct[0]}
+                        all_candidates.update(exact_content_matches)
+                        return {
+                            "status": "AMBIGUOUS", "tier": 5,
+                            "candidates": [(r[0], r[1], r[2]) for r in all_candidates.values()],
+                        }
                 out = self._resolved(5, distinct[0])
                 out["matched_alias"] = close[0]
                 return out
@@ -458,6 +885,87 @@ class WCLResolver:
             return bracket
 
         return {"status": "UNRESOLVED", "tier": None, "loose_candidates": self.loose_search(q)}
+
+    def _all_alias_rows(self) -> List[tuple]:
+        """Cached (alias_text, command_name, syntax, danger_level,
+        requires_admin, requires_confirmation, category) rows for every
+        Alias in the graph -- same one-time-load posture as
+        all_aliases(), reused by Tier 9 so a run of unresolved queries
+        doesn't re-issue this same full scan per query."""
+        if not hasattr(self, "_alias_rows_cache") or self._alias_rows_cache is None:
+            res = self.conn.execute(
+                "MATCH (a:Alias)<-[:HasAlias]-(c:Command) RETURN a.text, c.name, "
+                "c.syntax, c.danger_level, c.requires_admin, c.requires_confirmation, c.category"
+            )
+            rows = []
+            while res.has_next():
+                rows.append(tuple(res.get_next()))
+            self._alias_rows_cache = rows
+        return self._alias_rows_cache
+
+    def _containment_resolve(self, q: str, tokens: List[str]) -> Optional[Dict[str, Any]]:
+        """Tier 9: fires only when a real alias's own content words are
+        ALL present among the query's content words (never the reverse) --
+        catches a query that simply wraps a genuine, exact multi-word
+        alias in extra filler ("list all volumes" fully contains the real
+        alias "list volumes" plus one incidental extra word "all"; tier 1
+        misses because the full strings differ, and tier 5's difflib
+        ratio is computed over the WHOLE string, so one extra word can
+        drag a genuine match below the 0.82 cutoff even though the alias
+        is completely, unambiguously present).
+
+        Requires the matched alias to contribute at least 2 real content
+        words, specifically so a short/generic single-word alias (a bare
+        "vm" or "list") can't fire this off one incidental shared word --
+        that keeps this tier's precision close to tier 1's (real,
+        multi-word, exact substring-of-tokens match), not tier 5's
+        (approximate). Distinct commands found this way -> AMBIGUOUS,
+        same fail-safe posture as every other tier here.
+        """
+        content = set(_content_words(tokens))
+        if len(content) < 2:
+            return None
+        matched: Dict[str, tuple] = {}
+        for alias_text, name, syntax, danger, admin, confirm, category in self._all_alias_rows():
+            alias_words = set(_content_words(alias_text.split()))
+            # Padding-verb words still have to be PRESENT in the query
+            # (alias_words.issubset(content) below still checks the full
+            # set) -- they're just not allowed to be the thing that
+            # SATISFIES the "2 real distinguishing words" bar on their
+            # own, since they're template synonym-padding, not real
+            # per-command content. See ALIAS_PADDING_VERBS above.
+            distinguishing = alias_words - ALIAS_PADDING_VERBS
+            if len(distinguishing) >= 2 and alias_words.issubset(content):
+                matched[name] = (name, syntax, danger, admin, confirm, category)
+        if not matched:
+            return None
+        # BETA 0.3.64 (this session): a single containment match is
+        # deliberately NEVER returned as bare RESOLVED, even though every
+        # other single-match tier above (1/2/3/5) does exactly that.
+        # Found three distinct real false positives testing this same
+        # session -- "make a new folder called test" -> New-VM (via
+        # "make a new vm"), "copy file to backup" -> Out-File (via
+        # "backup file") -- both purely from two real words coexisting
+        # SOMEWHERE in the query, with no positional/grammatical
+        # constraint, because alias text here doesn't reliably encode
+        # word order or verb/object role ("backup" as a target noun vs.
+        # "backup" as the alias's intended verb are indistinguishable to
+        # a bag-of-words check). Tiers 1/2/3/5 don't have this problem --
+        # they match against near-complete alias strings, not scattered
+        # word membership, so a single hit there is much stronger
+        # evidence. Tier 9's real value is surfacing a good, GROUNDED
+        # candidate (or two) instead of leaving the right answer buried
+        # in loose_candidates -- same value whether reported as
+        # RESOLVED-with-uncertainty or AMBIGUOUS-with-one-candidate, and
+        # AMBIGUOUS is the status this codebase already uses everywhere
+        # else to mean "don't auto-trust this," so reusing it here costs
+        # nothing and is consistent with every other tier's fail-safe
+        # posture.
+        return {
+            "status": "AMBIGUOUS",
+            "tier": 9,
+            "candidates": [(r[0], r[1], r[2]) for r in matched.values()],
+        }
 
     def _bracket_resolve(
         self, q: str, tokens: List[str], original_query: str
@@ -517,6 +1025,77 @@ class WCLResolver:
             return None
         if len(rows) > 1:
             return {"status": "AMBIGUOUS", "tier": 7, "candidates": [(r[0], r[1], r[2]) for r in rows]}
+
+        # Safety check (BETA 0.3.64, this session -- real bug found via
+        # stress testing): this tier's whole design collapses everything
+        # between head and tail down to nothing, on the assumption the
+        # middle is pure filler/modifiers of the tail noun (true for
+        # "format the usb drive" -> middle "the usb" modifies "drive").
+        # That assumption breaks when a middle word is actually the real
+        # object of the sentence, not a modifier -- "create a checkpoint
+        # of the vm" degrades to head+tail "create vm", confidently
+        # returning New-VM, and silently discards "checkpoint", which was
+        # what the user actually asked to create. Guard against this by
+        # checking whether any real (non-stopword) middle word, paired
+        # with the SAME tail, is ALSO a genuine exact alias for a
+        # DIFFERENT command -- if so, the middle wasn't filler, and
+        # trusting the cruder head+tail guess over it would be
+        # confidently wrong. Fall to AMBIGUOUS (both real candidates)
+        # instead, same fail-safe posture as every other tier here.
+        competing = []
+        for word in middle:
+            if word in STOPWORDS:
+                continue
+            alt = f"{word} {tail}"
+            if alt == candidate:
+                continue
+            res2 = self.conn.execute(
+                "MATCH (a:Alias {text: $q})<-[:HasAlias]-(c:Command) "
+                "RETURN c.name, c.syntax, c.danger_level, c.requires_admin, c.requires_confirmation, c.category",
+                {"q": alt},
+            )
+            while res2.has_next():
+                r2 = res2.get_next()
+                if r2[0] != rows[0][0]:
+                    competing.append(r2)
+
+        # Broader version of the same check (BETA 0.3.64, this session):
+        # the exact "word + tail" check above still missed a real,
+        # dangerous case -- "add a hard disk to the vm" collapses to
+        # "add vm" -> confidently RESOLVED New-VM (creating a whole new
+        # VM), even though Add-VMHardDiskDrive's real alias is "add vm
+        # hard disk drive". The exact check can't find it because that
+        # alias also contains the word "drive", which the user's phrasing
+        # never used -- "word + tail" as an exact string never matches.
+        # So for any middle word not already covered above, also check
+        # for OTHER commands with an alias that CONTAINS both that word
+        # and the tail as whole words (substring, not exact-string) --
+        # strictly broader than the check above, so it can only add
+        # competing candidates, never remove the safety the exact check
+        # already provides. Still can only ever downgrade a bracket guess
+        # to AMBIGUOUS, same as every other check on this tier -- never
+        # promotes anything to a new RESOLVED on its own.
+        if not competing:
+            for word in middle:
+                if word in STOPWORDS or word in ALIAS_PADDING_VERBS:
+                    continue
+                res3 = self.conn.execute(
+                    "MATCH (a:Alias)<-[:HasAlias]-(c:Command) "
+                    "WHERE a.text =~ $wpat AND a.text =~ $tpat "
+                    "RETURN DISTINCT c.name, c.syntax, c.danger_level, c.requires_admin, c.requires_confirmation, c.category",
+                    {"wpat": rf".*\b{re.escape(word)}\b.*", "tpat": rf".*\b{re.escape(tail)}\b.*"},
+                )
+                while res3.has_next():
+                    r3 = res3.get_next()
+                    if r3[0] != rows[0][0]:
+                        competing.append(r3)
+
+        if competing:
+            seen = {rows[0][0]: rows[0]}
+            for r in competing:
+                seen.setdefault(r[0], r)
+            all_rows = list(seen.values())
+            return {"status": "AMBIGUOUS", "tier": 7, "candidates": [(r[0], r[1], r[2]) for r in all_rows]}
 
         out = self._resolved(7, rows[0])
 

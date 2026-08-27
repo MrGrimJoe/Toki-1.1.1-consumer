@@ -77,20 +77,40 @@ from extractor import (
     extract_slots, resolve_missing_slot, resolve_open_target, has_explicit_open_convention,
     MISSING_SLOT_QUESTIONS, GENERATE_FILE_SKIP_NAME_ANSWERS, file_index,
     is_anaphoric_reference, resolve_anaphoric_target, ANAPHORA_ELIGIBLE_INTENTS,
+    resolve_move_or_copy_with_context,
     find_time_expression, looks_conditional, looks_like_cancel_scheduled, format_delay,
     looks_like_bare_timer,
     looks_like_start_seeing, looks_like_stop_seeing,
     looks_like_start_listening, looks_like_stop_listening,
     looks_like_function_creation,
+    looks_like_move_or_copy_phrasing,
     looks_like_ambiguous_start_recording, looks_like_ambiguous_stop_recording,
     canned_reply, _is_wcl_code_like_var, _strip_answer_filler,
 )
 from apis import WeatherAPI, WebSearchAPI, TimeAPI, LocationAPI, FileConvertAPI, VideoDownloadAPI, FileOrganizerAPI, FileGroupingAPI, is_api_failure, location_cache
+from clip_qr import ClipboardFileAPI, QrCodeAPI
 from executor import RunningCommand
 from generator import FileGenerator, extract_explicit_name
 from app_control import AppController
 import foreground_tracker
-from graph_router import GraphRouter
+from conversation_memory import ConversationMemory
+from graph_router import GraphRouter, DB_PATH as _GRAPH_DB_PATH
+try:
+    # Optional Tier A router (see CHECKPOINT_MANIFEST.md /
+    # README_COMPONENT_ROUTER.md): component-graph-based classification,
+    # queried via real Cypher against Component/REQUIRES_COMPONENT/
+    # ANY_OF_COMPONENT/FORBIDS_COMPONENT nodes/edges (added to
+    # toki_graph_db by build_component_graph.py, additive-only -- never
+    # touches the existing Command/Phrasing tables GraphRouter itself
+    # reads). Benchmarked at 66/67 (98.5%) vs GraphRouter's own 64/67
+    # (95.5%) on the same 67-case blind set (run_comparison_v2.py).
+    # Import is soft-failed exactly like everything else Tier-A-graph-
+    # related in this file: if component_router_kuzu.py isn't present
+    # (e.g. an older checkout that predates this), LayeredGraphRouter
+    # below just never gets used and GraphRouter runs alone, unchanged.
+    from component_router_kuzu import KuzuComponentRouter
+except ImportError:
+    KuzuComponentRouter = None
 from wcl_resolver import WCLResolver
 from tier_a_wcl_map import is_equivalent
 from vocab_staging import log_graph_ask, confirm_graph_ask, reject_graph_ask
@@ -735,22 +755,9 @@ class _ThinkingHandle:
         self._thread = thread
         self._result = result
 
-    # Shown instead of a silent blank reply when the AI fallback was
-    # actually needed for this turn (graph + WCL both missed) and Ollama
-    # wasn't reachable to answer it -- see join() below. Wording is
-    # deliberately plain, not a stack trace or connection-error string:
-    # the user doesn't run Ollama themselves in most consumer installs.
-    _OLLAMA_UNREACHABLE_MESSAGE = (
-        "I didn't get that -- that needed my AI fallback (Ollama), "
-        "which isn't running or isn't reachable right now."
-    )
-
     def join(self, timeout: float = 30) -> str:
         self._thread.join(timeout=timeout)
-        text = self._result.get("text", "")
-        if not text and self._result.get("error"):
-            return _ThinkingHandle._OLLAMA_UNREACHABLE_MESSAGE
-        return text
+        return self._result.get("text", "")
 
 
 class OllamaRouter:
@@ -1010,7 +1017,8 @@ class OllamaRouter:
 
         return {"text": full_text}
 
-    def classify(self, user_prompt: str, history: Optional[List[Dict]] = None) -> Dict[str, Any]:
+    def classify(self, user_prompt: str, history: Optional[List[Dict]] = None,
+                 extra_context: Optional[str] = None) -> Dict[str, Any]:
         """
         Two-tier classification only -- no thinking/response text anymore,
         those come from stream_thinking() instead. Returns {"intent": name}
@@ -1033,6 +1041,15 @@ class OllamaRouter:
         (self.history, see _commit_history) specifically so this fix
         doesn't reopen the original prompt-processing cost concern by
         passing a large or growing amount of context on every call.
+
+        extra_context (new): an optional plain-text note prepended as its
+        own system-role message before `history` -- see
+        conversation_memory.py's ConversationMemory.get_recent_topic_context()
+        and orchestrator.py's call site for exactly what this carries (a
+        short summary of keywords from up to the last 10 turns, well
+        beyond `history`'s own 2-turn cap) and why it's ONLY ever passed
+        on a total Tier A graph miss. Purely additive: omitting it (the
+        default) behaves identically to before this parameter existed.
         """
         self._cancelled = False
 
@@ -1046,9 +1063,13 @@ class OllamaRouter:
             if (time.time() - self._last_unreachable_time) < self._UNREACHABLE_RETRY_SECONDS:
                 return {"error": "Can't reach Ollama — is it running on localhost:11434?"}
 
+        combined_history: Optional[List[Dict]] = history
+        if extra_context:
+            combined_history = [{"role": "system", "content": extra_context}] + (history or [])
+
         # Tier 1: category. Now receives history too -- see docstring above
         # for why the earlier "tier-1 never needs history" assumption broke.
-        cat_result = self._call(_build_category_prompt(), user_prompt, _CATEGORY_SCHEMA, history=history)
+        cat_result = self._call(_build_category_prompt(), user_prompt, _CATEGORY_SCHEMA, history=combined_history)
         if "error" in cat_result:
             return cat_result
 
@@ -1077,7 +1098,7 @@ class OllamaRouter:
 
         # Tier 2: command within that category.
         cmd_result = self._call(
-            _build_command_prompt(category), user_prompt, _command_schema(category), history
+            _build_command_prompt(category), user_prompt, _command_schema(category), combined_history
         )
         if "error" in cmd_result:
             return cmd_result
@@ -1103,12 +1124,16 @@ class ToolDispatcher:
         self.videodownload = VideoDownloadAPI()
         self.fileorganizer = FileOrganizerAPI()
         self.filegrouping = FileGroupingAPI()
+        self.clipboardfile = ClipboardFileAPI()
+        self.qrcode = QrCodeAPI()
         self._apis = {"weather": self.weather, "websearch": self.search,
                       "time": self.time, "location": self.location,
                       "fileconvert": self.fileconvert,
                       "videodownload": self.videodownload,
                       "fileorganizer": self.fileorganizer,
-                      "filegrouping": self.filegrouping}
+                      "filegrouping": self.filegrouping,
+                      "clipboardfile": self.clipboardfile,
+                      "qrcode": self.qrcode}
 
     def call(self, meta: Dict, slots: Dict[str, str]) -> str:
         api = self._apis.get(meta["api"])
@@ -1320,6 +1345,67 @@ def _split_chain_if_viable(user_prompt: str, graph_router: Optional["GraphRouter
     return [user_prompt]
 
 
+class LayeredGraphRouter:
+    """Tries the experimental component router first (KuzuComponentRouter,
+    see CHECKPOINT_MANIFEST.md/README_COMPONENT_ROUTER.md), falls back to
+    the existing production GraphRouter (TF-IDF) on any miss. This is the
+    staged, fallback-guarded integration CHECKPOINT_MANIFEST.md's own
+    "what another engineer should do next" section called for -- never a
+    replacement for GraphRouter, always a layer in front of it.
+
+    Deliberately implements the exact same three-method classify()/
+    classify_or_ask()/close() contract as either router alone, so it can
+    be dropped in as `self.graph_router` with ZERO changes needed at any
+    existing call site in this file (_split_chain_if_viable/
+    _segment_is_viable, the two classify()/classify_or_ask() call sites
+    in _process_single_request, shutdown()'s close(), the status line) --
+    all of them already treat self.graph_router as "some object with this
+    contract, or None", never GraphRouter specifically.
+
+    classify_or_ask() deliberately does NOT layer the component router's
+    own classify_or_ask() -- only its classify() (confident-hit-or-None).
+    The component router's below-threshold "candidate" logic exists
+    solely to satisfy test_chain_splitting.py's interchangeability check
+    (see component_router_kuzu.py's own classify_or_ask() docstring) and
+    was never benchmarked/tuned for real clarifying-question UX the way
+    GraphRouter's ask/unknown_words path has been across many sessions.
+    So: component router gets exactly one job here -- resolve MORE
+    confident hits than GraphRouter alone does -- and every other
+    behavior (clarifying questions, candidate whitelisting) stays
+    unchanged, sourced from GraphRouter exactly as before.
+    """
+
+    def __init__(self, component_router: Optional["KuzuComponentRouter"], tfidf_router: GraphRouter):
+        self.component_router = component_router
+        self.tfidf_router = tfidf_router
+
+    def classify(self, user_prompt: str) -> Optional[Dict[str, Any]]:
+        if self.component_router is not None:
+            result = self.component_router.classify(user_prompt)
+            if result is not None:
+                return result
+        return self.tfidf_router.classify(user_prompt)
+
+    def classify_or_ask(self, user_prompt: str) -> Dict[str, Any]:
+        if self.component_router is not None:
+            result = self.component_router.classify(user_prompt)
+            if result is not None:
+                return result
+        return self.tfidf_router.classify_or_ask(user_prompt)
+
+    def close(self):
+        if self.component_router is not None:
+            try:
+                self.component_router.close()
+            except Exception:
+                # Same fail-open posture as everywhere else touching the
+                # graph on shutdown -- a close() failure on the
+                # (optional, experimental) component router must never
+                # stop the real GraphRouter's own close() from running.
+                pass
+        self.tfidf_router.close()
+
+
 class WindowsAIAssistant:
     """Ties classification, slot-filling, generation, and execution together for the UI."""
 
@@ -1338,6 +1424,36 @@ class WindowsAIAssistant:
             # fail open to LLM-only classification (today's v2.11
             # behavior) rather than crashing the whole app on startup.
             self.graph_router = None
+        else:
+            # Layer the experimental component router in front of it --
+            # see LayeredGraphRouter's own docstring. Same fail-open
+            # posture as GraphRouter's own construction just above: any
+            # failure building the component router (missing
+            # component_router_kuzu.py, missing Component tables on an
+            # older toki_graph_db that hasn't had build_component_graph.py
+            # run against it, etc.) just leaves component_router as None
+            # and self.graph_router keeps behaving exactly as it always
+            # has -- this can never make classification WORSE than
+            # today's GraphRouter-only behavior, only equal or better.
+            component_router = None
+            if KuzuComponentRouter is not None:
+                try:
+                    # BETA 0.3.67 fix: hand the GraphRouter's OWN already-
+                    # open kuzu.Database to KuzuComponentRouter instead of
+                    # pointing it at the same directory again. Two
+                    # independent kuzu.Database opens on one directory
+                    # reliably fail with a lock error on Windows (worked
+                    # by accident on Linux/this sandbox, which is why
+                    # this went unnoticed) -- and because this whole
+                    # block is (deliberately) fail-open, that failure was
+                    # silently swallowed below, leaving component_router
+                    # None on every real Windows run ever since this
+                    # layer was added. See KuzuComponentRouter.__init__'s
+                    # docstring for the full story.
+                    component_router = KuzuComponentRouter(self.graph_router.db)
+                except Exception:
+                    component_router = None
+            self.graph_router = LayeredGraphRouter(component_router, self.graph_router)
         # windows_command_library matching lives in its OWN graph now --
         # see wcl_resolver.py's module docstring for why this replaced
         # tiers A2/B of the old toki_graph_db. Same fail-open pattern.
@@ -1356,6 +1472,7 @@ class WindowsAIAssistant:
         self.scheduler = ScheduledCommandManager()
         self.condition_poller = ConditionPoller()
         self.history: List[Dict] = []
+        self.conversation_memory = ConversationMemory()
         self._current_cmd: Optional[RunningCommand] = None
         # Set when a turn ended by asking the user a fixed follow-up
         # question (a required slot was missing). The NEXT process_request()
@@ -1399,6 +1516,16 @@ class WindowsAIAssistant:
         # in-memory, no persistence -- same "TOKI already knows when it
         # wrote something" reasoning as FileIndex/AppController's caches.
         self._last_touched: Optional[Dict[str, str]] = None
+        # Small name -> path map of folders TOKI has recently made or
+        # moved/copied something into this session -- e.g. after "make a
+        # folder called function", {"function": "...\\Desktop\\function"}.
+        # Consulted by resolve_move_or_copy_with_context() (see
+        # extractor.py) so "put it in function" resolves to the SAME
+        # folder rather than creating a duplicate. Deliberately capped to
+        # the 3 most recently mentioned names (see that function's own
+        # docstring) and, like _last_touched above, session-only and
+        # never persisted.
+        self._recent_folder_names: Dict[str, str] = {}
         self._prime_caches_in_background()
         # Starts app_control.py's foreground-window fix (see
         # foreground_tracker.py's module docstring) as early as possible --
@@ -1492,6 +1619,37 @@ class WindowsAIAssistant:
             path = slots.get("path")
         if path:
             self._last_touched = {"path": path}
+        if intent == "MAKE_FOLDER" and path:
+            # Register the new folder's own name so a later "put it in
+            # <name>" (resolve_move_or_copy_with_context, extractor.py)
+            # reuses this exact folder instead of creating a duplicate.
+            folder_name = ntpath.basename(path.rstrip("\\/")).lower()
+            if folder_name:
+                # BETA 0.3.66 (widget-context merge session): confirmed
+                # live, a real LRU-cache correctness bug. This is meant
+                # to keep the 3 MOST RECENTLY touched folder names --
+                # but a plain dict's `d[existing_key] = value` does NOT
+                # move that key to the end of iteration order, it stays
+                # wherever it was FIRST inserted. So re-touching an
+                # already-cached folder name (creating "Homework" again
+                # after it was already used earlier this session) never
+                # promoted it -- confirmed directly: create A, B, C
+                # (cache full), re-touch A, create D -> A gets evicted
+                # by the `next(iter(...))` eviction below even though it
+                # was the MOST recently used of the four, because it was
+                # still sitting in its original (oldest) iteration
+                # position. This silently defeated the exact "reuse this
+                # exact folder instead of creating a duplicate" purpose
+                # the comment above describes, specifically for the
+                # folders a user actually reuses often. Fixed by
+                # explicitly dropping the key before re-inserting it
+                # whenever it already exists, so a re-touch always moves
+                # it to the end (most-recent) position, matching real
+                # LRU semantics without changing this from a plain dict.
+                self._recent_folder_names.pop(folder_name, None)
+                self._recent_folder_names[folder_name] = path
+                while len(self._recent_folder_names) > 3:
+                    self._recent_folder_names.pop(next(iter(self._recent_folder_names)))
 
     def stop(self):
         """Stop button — kills whichever call/process is in flight."""
@@ -1702,7 +1860,7 @@ class WindowsAIAssistant:
             f"Which one did you mean? You can also rephrase to be specific."
         )
 
-    def _commit_history(self, user_prompt: str, assistant_note: str):
+    def _commit_history(self, user_prompt: str, assistant_note: str, intent: Optional[str] = None):
         """Never poison history with a turn that failed — only call this
         once the whole turn's outcome (including any error text) is known.
 
@@ -1711,11 +1869,22 @@ class WindowsAIAssistant:
         and it only needs enough to resolve something like "stop it" referring
         to the immediately preceding turn -- not a long conversational tail.
         Smaller history means less prompt-processing on every tier-2 call.
+
+        Also feeds conversation_memory.py's ConversationMemory -- the
+        separate, longer (10-turn) KEYWORD-only memory used for
+        OllamaRouter.classify()'s extra_context on a total Tier A miss
+        (see that call site's own comment). `intent` is best-effort: most
+        call sites of _commit_history don't have a cleanly resolved
+        intent in scope (an ask, an error, a chat reply aren't "an
+        intent" in any meaningful sense), so it defaults to None there --
+        ConversationMemory's own docstring notes intent is contextual
+        metadata only, never required for its core keyword-matching use.
         """
         self.history.append({"role": "user", "content": user_prompt})
         self.history.append({"role": "assistant", "content": assistant_note})
         if len(self.history) > 4:
             self.history[:] = self.history[-4:]
+        self.conversation_memory.record(user_prompt, intent)
 
     def process_request(
         self,
@@ -1944,36 +2113,43 @@ class WindowsAIAssistant:
                 on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
             )
 
-        # ── "function" pre-check (routes straight to GENERATE_FILE) ──────
-        # BETA 0.3.56: bypasses Tier A's graph scoring entirely for any
-        # message mentioning "function" -- see extractor.py's
-        # looks_like_function_creation() docstring for the full
-        # reasoning (this closes STATUS.md's 0.3.55 "not yet fixed"
-        # flag: "create a function called calculator" scoring below
-        # CONFIDENCE_THRESHOLD because a specific name dilutes the
-        # query's own TF-IDF vector). Same pre-check shape as the
-        # start/stop seeing/listening checks just above -- GENERATE_FILE
-        # has "slots": [] by design, so extract_slots() here always
-        # returns {} (never None, never triggers the missing-slot ask
-        # path), and _dispatch()'s own extract_explicit_name() check
-        # (BETA 0.3.55) still runs normally on the other side of this --
-        # a bare "create a function" with no name still asks "what
-        # should I name it?" exactly as it already does for every other
-        # GENERATE_FILE request reached the normal way.
-        if looks_like_function_creation(user_prompt):
-            slots = extract_slots("GENERATE_FILE", user_prompt)
-            return self._handle_missing_or_dispatch(
-                "GENERATE_FILE", user_prompt, slots,
-                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
-            )
-
         # ── Ambiguous bare "start/stop recording" pre-checks ─────────────
-        # Only ever reached once BOTH the seeing/watching AND listening/
-        # dictating checks above already returned False -- see
-        # extractor.py's looks_like_ambiguous_start_recording()/
-        # looks_like_ambiguous_stop_recording() docstrings for why this is
-        # the genuinely irreducible leftover case, not a weaker version of
-        # the checks above.
+        # BETA 0.3.66 (widget-context merge session): MOVED to run BEFORE
+        # the "function" pre-check below -- confirmed live, a real and
+        # fairly severe bug: "start recording this function" (a genuine,
+        # very natural way to ask TOKI to start a macro recording, using
+        # "function" loosely to mean "task/feature", not "code function")
+        # used to hit the "function" pre-check FIRST (it fires on the
+        # bare word "function" anywhere in the text -- see
+        # looks_like_function_creation()'s docstring), silently routing
+        # the whole request to GENERATE_FILE instead. No macro recording
+        # ever started. Worse: GENERATE_FILE's own missing-name follow-up
+        # question then set self._pending, and _process_single_request()
+        # checks self._pending FIRST on every subsequent turn (see its
+        # docstring above) -- so EVERY following message, including a
+        # literal "stop", got silently consumed as the answer to "what
+        # should I name it?" instead of being processed as its own
+        # request. Confirmed live: this produced the placeholder reply
+        # " (file generation isn't wired up in this UI yet)" no matter
+        # what the user typed next, which reads exactly like the system
+        # being stuck/unresponsive -- there was no way out of it except
+        # noticing the actual question being asked was about a file, not
+        # a macro, and answering it directly (or restarting the app to
+        # clear self._pending).
+        #
+        # Fix: this block now runs first, so a message matching the
+        # "start/begin ... recording" phrase, or bare "record"/
+        # "recording" as its own leading word (see this session's
+        # earlier fix to looks_like_ambiguous_start_recording() for why
+        # that's now a safe, narrow signal rather than a bare-anywhere
+        # match), takes priority over the "function" pre-check below.
+        # Safe to do because of that same earlier fix: a genuine function
+        # -creation request that happens to mention "record" in passing
+        # ("create a function that saves a record to the database") does
+        # NOT match this block at all ("record" isn't the leading word,
+        # no "start"/"begin"+"recording" phrase), so it still reaches the
+        # function pre-check exactly as before, unaffected by this
+        # reordering.
         if looks_like_ambiguous_stop_recording(user_prompt):
             # Runtime state actually answers this one, unlike "start" --
             # by the time someone says "stop," something real either is or
@@ -2016,6 +2192,32 @@ class WindowsAIAssistant:
                         "what you say?")
             self._commit_history(user_prompt, question)
             return {"thinking": "", "response": question, "kind": "chat"}
+
+        # ── "function" pre-check (routes straight to GENERATE_FILE) ──────
+        # BETA 0.3.56: bypasses Tier A's graph scoring entirely for any
+        # message mentioning "function" -- see extractor.py's
+        # looks_like_function_creation() docstring for the full
+        # reasoning (this closes STATUS.md's 0.3.55 "not yet fixed"
+        # flag: "create a function called calculator" scoring below
+        # CONFIDENCE_THRESHOLD because a specific name dilutes the
+        # query's own TF-IDF vector). Same pre-check shape as the
+        # start/stop seeing/listening checks just above -- GENERATE_FILE
+        # has "slots": [] by design, so extract_slots() here always
+        # returns {} (never None, never triggers the missing-slot ask
+        # path), and _dispatch()'s own extract_explicit_name() check
+        # (BETA 0.3.55) still runs normally on the other side of this --
+        # a bare "create a function" with no name still asks "what
+        # should I name it?" exactly as it already does for every other
+        # GENERATE_FILE request reached the normal way.
+        #
+        # BETA 0.3.66: moved below the ambiguous-recording pre-checks --
+        # see that block's own comment above for the real bug this fixed.
+        if looks_like_function_creation(user_prompt):
+            slots = extract_slots("GENERATE_FILE", user_prompt)
+            return self._handle_missing_or_dispatch(
+                "GENERATE_FILE", user_prompt, slots,
+                on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+            )
 
         # ── Scheduling / conditional pre-check ──────────────────────────
         # Runs BEFORE both the override parser and graph classification.
@@ -2306,7 +2508,59 @@ class WindowsAIAssistant:
                 and wcl_result["status"] in ("RESOLVED", "AMBIGUOUS")
             )
             if wcl_had_real_candidate:
-                msg = "I found a matching command but can't safely fill in all its details yet -- try rephrasing it more directly."
+                # BETA 0.3.66 (widget-context merge session): confirmed
+                # live gap while tracing how AMBIGUOUS is actually
+                # surfaced to the user -- this branch used to send the
+                # SAME generic "try rephrasing it more directly" message
+                # for BOTH cases below, even though they're genuinely
+                # different situations:
+                #   - RESOLVED-but-can't-safely-fill-in (3+ variables, or
+                #     a destructive command the user just cancelled):
+                #     there's really only one candidate command, it just
+                #     needs more detail from the user -- "rephrase" is
+                #     honest guidance here.
+                #   - AMBIGUOUS: wcl_resolver.py already worked out a
+                #     concrete, specific list of real candidate commands
+                #     (name + danger_level per candidate) -- silently
+                #     discarding that list and telling the user to
+                #     "rephrase" with zero information wastes exactly the
+                #     disambiguation work the resolver already did, and
+                #     leaves the user guessing at wording with no signal
+                #     at all. This got MORE consequential after this same
+                #     session's wcl_resolver.py fixes (BETA 0.3.66): those
+                #     fixes deliberately convert some wrong-but-confident
+                #     RESOLVED answers into correct AMBIGUOUS ones as a
+                #     safety improvement -- every one of those cases was
+                #     landing here and getting the same content-free
+                #     "try rephrasing" reply, with no way for the user to
+                #     ever learn what the real options actually were.
+                #
+                # Fix: for AMBIGUOUS specifically, name the actual
+                # candidates (command name + danger level), capped at 3
+                # to keep the question readable -- same style and cap
+                # rationale as _destructive_shadow_question() above.
+                # Deliberately NOT wired into self._pending for a
+                # structured follow-up reply (e.g. "the second one"):
+                # that's a real, separate feature (parsing an arbitrary
+                # free-text answer back onto one specific candidate) with
+                # its own failure modes, out of scope for this fix, whose
+                # job is only to stop hiding information the resolver
+                # already had.
+                if wcl_result["status"] == "AMBIGUOUS":
+                    candidates = wcl_result.get("candidates", [])
+                    named = [
+                        f"{c[0]} ({c[2]})" if len(c) > 2 and c[2] else c[0]
+                        for c in candidates[:3]
+                    ]
+                    if named:
+                        msg = (
+                            f"That could match a few different commands: {', '.join(named)}. "
+                            f"Which one did you mean? You can also rephrase to be specific."
+                        )
+                    else:
+                        msg = "I found a few possible matching commands but couldn't tell them apart -- try rephrasing it more directly."
+                else:
+                    msg = "I found a matching command but can't safely fill in all its details yet -- try rephrasing it more directly."
                 self._commit_history(user_prompt, msg)
                 return {"thinking": "", "response": msg, "kind": "chat"}
 
@@ -2357,7 +2611,10 @@ class WindowsAIAssistant:
             # candidate (if any) is still logged into vocab_staging.jsonl
             # so the 👍/👎 vocabulary-learning loop doesn't lose data, it
             # just no longer interrupts the user with a guess about it.
-            llm_result = self.router.classify(user_prompt, history=self.history)
+            llm_result = self.router.classify(
+                user_prompt, history=self.history,
+                extra_context=self.conversation_memory.get_recent_topic_context(),
+            )
             if "error" not in llm_result:
                 classification = llm_result
             else:
@@ -2408,6 +2665,36 @@ class WindowsAIAssistant:
                         # re-resolve-on-commit pattern that cascade already
                         # uses for its own retry-once-on-miss path.
                         classification = {"intent": resolved_open["intent"]}
+                    elif (move_copy_intent := looks_like_move_or_copy_phrasing(user_prompt)) is not None:
+                        # Same deterministic-check-before-giving-up spirit
+                        # as resolve_open_target() just above, for the
+                        # "put it in function" shape: the graph's own
+                        # MOVE_ITEM/COPY_ITEM vocabulary was built from
+                        # "move X to Y"/"copy X to Y" only (that already
+                        # classifies correctly above, completely
+                        # unaffected by this) and has no coverage for
+                        # "put"/"place"/"drop" at all -- confirmed live,
+                        # this is exactly why it fell all the way through
+                        # to here in the first place. Deliberately placed
+                        # AFTER both the graph and WCL have already had a
+                        # real shot (this whole branch only runs on a
+                        # genuine miss from both, see this method's own
+                        # comment above) so a WCL-defined custom command
+                        # that happens to also use "copy"/"move" keeps
+                        # winning exactly as it already does -- this is
+                        # strictly a last-resort catch, never a pre-empt.
+                        # See resolve_move_or_copy_with_context()'s own
+                        # docstring in extractor.py for the actual slot
+                        # resolution (implicit source + bare folder name).
+                        slots = extract_slots(move_copy_intent, user_prompt)
+                        if slots is None:
+                            slots = resolve_move_or_copy_with_context(
+                                move_copy_intent, user_prompt, self._last_touched, self._recent_folder_names,
+                            )
+                        return self._handle_missing_or_dispatch(
+                            move_copy_intent, user_prompt, slots,
+                            on_output, on_done, on_thinking_token, on_generate_token, on_generate_done,
+                        )
                     else:
                         # Run the search directly rather than synthesizing a
                         # {"intent": "SEARCH_WEB"} classification and letting it
@@ -2423,7 +2710,7 @@ class WindowsAIAssistant:
                         search_query = user_prompt.strip()
                         if search_query:
                             result_text = self.dispatcher.search.search(query=search_query)
-                            self._commit_history(user_prompt, result_text)
+                            self._commit_history(user_prompt, result_text, intent="SEARCH_WEB")
                             return {"thinking": "", "response": result_text, "kind": "api",
                                     "intent": "SEARCH_WEB", "result": result_text}
                         msg = "I didn't catch that -- can you rephrase?"
@@ -2560,6 +2847,15 @@ class WindowsAIAssistant:
             # created/touched this session instead of asking a question,
             # if there's something real to resolve against.
             slots = resolve_anaphoric_target(intent, self._last_touched)
+
+        if slots is None and intent in ("MOVE_ITEM", "COPY_ITEM"):
+            # "put it in function" -- neither slot was extractable the
+            # normal way; this covers BOTH an implicit source and a bare
+            # destination folder name at once. See
+            # resolve_move_or_copy_with_context()'s own docstring.
+            slots = resolve_move_or_copy_with_context(
+                intent, user_prompt, self._last_touched, self._recent_folder_names,
+            )
 
         if slots is None:
             # Required detail missing — ask a FIXED question, don't guess
@@ -2830,7 +3126,7 @@ class WindowsAIAssistant:
             preview_command = _build_powershell_command(meta, slots)
         except (KeyError, ValueError, IndexError) as e:
             note = f"Done. (missing a detail: {e})"
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": "", "response": note, "kind": "chat"}
 
         self._pending_confirmation = {
@@ -2932,6 +3228,13 @@ class WindowsAIAssistant:
             # else), but it's not actually an unusable answer, just an
             # anaphoric one. Try last-touched before re-asking.
             slots = resolve_anaphoric_target(intent, self._last_touched)
+        if slots is None and intent in ("MOVE_ITEM", "COPY_ITEM"):
+            # Same "put it in function" fallback as the initial-turn call
+            # site above, for when the answer to a follow-up question is
+            # phrased that way instead of a bare name.
+            slots = resolve_move_or_copy_with_context(
+                intent, user_answer, self._last_touched, self._recent_folder_names,
+            )
         if slots is None:
             # Still not usable (e.g. empty reply, or a two-part answer
             # missing its second half) -- ask again rather than guessing.
@@ -3061,7 +3364,7 @@ class WindowsAIAssistant:
                 # fail loudly rather than silently doing nothing.
                 thinking_text = join_thinking()
                 note = f"{thinking_text} (file generation isn't wired up in this UI yet)"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": thinking_text, "response": note, "kind": "chat"}
 
             def wrapped_done(path: Optional[str], error: Optional[str]):
@@ -3109,7 +3412,7 @@ class WindowsAIAssistant:
             action_fn = getattr(self.app_controller, action_name, None)
             if action_fn is None:
                 note = f"Done. (internal error: unknown app_control action {action_name})"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             result = action_fn(**slots, **extra_args)
@@ -3162,7 +3465,7 @@ class WindowsAIAssistant:
             else:
                 response_text = result if isinstance(result, str) and result else thinking_text
             note = f"{thinking_text} (result: {result})" if result else thinking_text
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": thinking_text, "response": response_text, "kind": "app_control",
                      "intent": intent, "result": result}
 
@@ -3171,7 +3474,7 @@ class WindowsAIAssistant:
                 command = _build_powershell_command(meta, slots)
             except (KeyError, ValueError, IndexError) as e:
                 note = f"Done. (missing a detail: {e})"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             # No narration LLM call for pure command dispatches -- per
@@ -3221,12 +3524,12 @@ class WindowsAIAssistant:
                 item = self.scheduler.schedule(delay_seconds, command_text, _on_fire)
             except SchedulerFullError as e:
                 note = f"Done. Can't schedule that: {e}"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             note = (f"Done. Scheduled as {item.id}: \"{command_text}\" {delay_label}. "
                     f"Say \"cancel {item.id}\" to cancel it.")
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": "Done.", "response": note, "kind": "schedule",
                      "intent": intent, "schedule_id": item.id}
 
@@ -3255,13 +3558,13 @@ class WindowsAIAssistant:
                 item = self.scheduler.schedule(delay_seconds, display, _on_fire)
             except SchedulerFullError as e:
                 note = f"Done. Can't set that timer: {e}"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             note = (f"Done. Timer set as {item.id}, {delay_label}"
                     + (f" -- I'll remind you: {label}" if label else "") + ". "
                     f"Say \"cancel {item.id}\" to cancel it.")
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": "Done.", "response": note, "kind": "timer",
                      "intent": intent, "schedule_id": item.id}
 
@@ -3278,7 +3581,7 @@ class WindowsAIAssistant:
                 active_c = [it.id for it in self.condition_poller.list_active()]
                 available = ", ".join(active_s + active_c) or "none"
                 note = f"Done. Couldn't find \"{ref}\" to cancel. Currently active: {available}."
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": "Done.", "response": note, "kind": "cancel_scheduled", "intent": intent}
 
         if meta["kind"] == "conditional":
@@ -3288,7 +3591,7 @@ class WindowsAIAssistant:
                 supported = ", ".join(CHECKABLE_CONDITIONS_SUMMARY)
                 note = (f"Done. I can't monitor \"{condition_and_action}\" yet -- "
                         f"right now I can only watch for: {supported}.")
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             action_text = condition_and_action
@@ -3320,12 +3623,12 @@ class WindowsAIAssistant:
                 item = self.condition_poller.start(checker, condition_and_action, _on_true, _on_error, _on_timeout)
             except RuntimeError as e:
                 note = f"Done. Can't start watching that: {e}"
-                self._commit_history(user_prompt, note)
+                self._commit_history(user_prompt, note, intent=intent)
                 return {"thinking": "", "response": note, "kind": "chat"}
 
             note = (f"Done. Watching as {item.id}: \"{condition_and_action}\". "
                     f"Say \"cancel {item.id}\" to stop watching.")
-            self._commit_history(user_prompt, note)
+            self._commit_history(user_prompt, note, intent=intent)
             return {"thinking": "Done.", "response": note, "kind": "conditional",
                      "intent": intent, "watch_id": item.id}
 

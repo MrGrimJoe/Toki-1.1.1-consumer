@@ -263,7 +263,7 @@ begin
   ExtractDir := ExpandConstant('{tmp}\toki_main_extracted');
   InnerFolder := ExtractDir + '\{#MyRepoZipRootFolder}';
 
-  WizardForm.StatusLabel.Caption := 'Downloading TOKI (main branch) from GitHub...';
+  WizardForm.StatusLabel.Caption := 'Step 1 of 4: Downloading TOKI (main branch) from GitHub...';
   PSCommand :=
     '-NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri ' +
     '''{#MyRepoZipUrl}'' -OutFile ''' + ZipPath + ''' -UseBasicParsing"';
@@ -275,7 +275,7 @@ begin
     Exit;
   end;
 
-  WizardForm.StatusLabel.Caption := 'Extracting TOKI...';
+  WizardForm.StatusLabel.Caption := 'Step 2 of 4: Extracting TOKI...';
   PSCommand :=
     '-NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path ''' +
     ZipPath + ''' -DestinationPath ''' + ExtractDir + ''' -Force"';
@@ -293,6 +293,7 @@ begin
   // itself (setup_runtime.ps1 and Launch TOKI.bat.template were already
   // placed directly by [Files] above, so this only adds to {app}, never
   // overwrites those two).
+  WizardForm.StatusLabel.Caption := 'Step 3 of 4: Copying TOKI''s files into place...';
   PSCommand :=
     '-NoProfile -ExecutionPolicy Bypass -Command "Copy-Item -Path ''' +
     InnerFolder + '\*'' -Destination ''' + ExpandConstant('{app}') +
@@ -321,7 +322,18 @@ var
   AppDir: String;
 begin
   if CurStep = ssPostInstall then begin
+    // The built-in progress bar only tracks the [Files] copy step, which
+    // is just a couple of small helper scripts and finishes in seconds --
+    // it hits 100% almost immediately and then just sits there, frozen,
+    // for however long the download/extract/Python-setup steps below
+    // actually take (can be several minutes). Switching it to marquee
+    // (indeterminate/scrolling) mode here makes it visibly "alive" during
+    // that whole stretch instead of looking stuck at a false 100%; the
+    // StatusLabel text underneath still says what's actually happening.
+    WizardForm.ProgressGauge.Style := npbstMarquee;
+
     if not DownloadTokiSource then begin
+      WizardForm.ProgressGauge.Style := npbstNormal;
       MsgBox('TOKI could not be downloaded, so setup cannot continue. ' +
              'Nothing further was installed.', mbError, MB_OK);
       Exit;
@@ -335,8 +347,8 @@ begin
       IncludeVoiceStr := '$false';
 
     WizardForm.StatusLabel.Caption :=
-      'Setting up TOKI''s Python runtime -- this needs an internet ' +
-      'connection and can take several minutes...';
+      'Step 4 of 4: Setting up TOKI''s Python runtime -- this needs an ' +
+      'internet connection and can take several minutes...';
 
     // {app} is embedded below inside DOUBLE quotes directly on the raw
     // process command line (unlike DownloadTokiSource's single-quoted
@@ -383,5 +395,7 @@ begin
         MsgBox('Could not download Ollama''s installer automatically. ' +
                'Install it yourself from https://ollama.com when convenient.', mbInformation, MB_OK);
     end;
+
+    WizardForm.ProgressGauge.Style := npbstNormal;
   end;
 end;

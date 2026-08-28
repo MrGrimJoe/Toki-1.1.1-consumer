@@ -26,7 +26,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout installer branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: installer
 
@@ -60,7 +60,7 @@ jobs:
           }
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: TokiInstaller-${{ steps.ver.outputs.version }}
           path: toki-installer-branch\dist\TokiInstaller.exe
@@ -68,7 +68,7 @@ jobs:
 
       - name: Publish GitHub Release
         if: github.event_name == 'workflow_dispatch' && inputs.publish_release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: TOKI v${{ steps.ver.outputs.version }}

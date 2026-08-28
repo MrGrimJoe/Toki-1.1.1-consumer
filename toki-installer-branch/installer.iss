@@ -44,6 +44,14 @@
 #define MyRepoZipUrl "https://codeload.github.com/MrGrimJoe/Toki-1.1.1-consumer/zip/refs/heads/main"
 #define MyRepoZipRootFolder "Toki-1.1.1-consumer-main"
 
+; GITHUB_RUN_NUMBER is set automatically by every Actions run (auto-
+; incrementing per workflow, not per commit) -- falls back to "local" for
+; a manual compile off CI, so that's still a legal, greppable filename.
+#define MyBuildTag GetEnv("GITHUB_RUN_NUMBER")
+#if MyBuildTag == ""
+  #define MyBuildTag "local"
+#endif
+
 [Setup]
 AppId={{8F1B1E6E-6C9B-4B6E-9A6E-5F6A2B8C9D10}
 AppName={#MyAppName}
@@ -56,7 +64,10 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 OutputDir=dist
-OutputBaseFilename=TokiInstaller
+; Includes the build number so two builds of the same MyAppVersion never
+; produce a same-named file -- avoids exactly the "which exe is this
+; actually" confusion of silently overwriting/reusing an old download.
+OutputBaseFilename=TOKI-Setup-{#MyAppVersion}-build{#MyBuildTag}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

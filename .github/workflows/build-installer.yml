@@ -1,6 +1,6 @@
 name: Build TOKI Installer
 
-# Builds toki-installer-branch/installer.iss into TokiInstaller.exe on a
+# Builds toki-installer-branch/installer.iss into a TOKI-Setup-*.exe on a
 # Windows runner (Inno Setup is Windows-only). Doesn't need `main` checked
 # out -- the installer itself downloads app source from `main` at install
 # time, same as a local build per BUILD_INSTRUCTIONS.md.
@@ -51,19 +51,27 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "toki-installer-branch\installer.iss"
 
-      - name: Verify output exists
+      - name: Locate compiled installer
+        id: out
         shell: pwsh
         run: |
-          if (-not (Test-Path "toki-installer-branch\dist\TokiInstaller.exe")) {
-            Write-Error "TokiInstaller.exe was not produced -- check the ISCC log above."
+          # OutputBaseFilename is TOKI-Setup-{version}-build{run number}, not a
+          # fixed name, so it always matches whatever installer.iss actually
+          # produced this run instead of assuming a hardcoded filename.
+          $exe = Get-ChildItem -Path "toki-installer-branch\dist" -Filter "TOKI-Setup-*.exe" -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "No TOKI-Setup-*.exe found in toki-installer-branch\dist -- check the ISCC log above."
             exit 1
           }
+          echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          echo "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
-          name: TokiInstaller-${{ steps.ver.outputs.version }}
-          path: toki-installer-branch\dist\TokiInstaller.exe
+          name: ${{ steps.out.outputs.name }}
+          path: ${{ steps.out.outputs.path }}
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -72,6 +80,6 @@ jobs:
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: TOKI v${{ steps.ver.outputs.version }}
-          files: toki-installer-branch\dist\TokiInstaller.exe
+          files: ${{ steps.out.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

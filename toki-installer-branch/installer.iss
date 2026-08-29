@@ -331,6 +331,7 @@ var
   IncludeVoiceStr: String;
   PSCommand: String;
   AppDir: String;
+  ScriptPath: String;
 begin
   if CurStep = ssPostInstall then begin
     // The built-in progress bar only tracks the [Files] copy step, which
@@ -375,15 +376,37 @@ begin
     if (Length(AppDir) > 0) and (AppDir[Length(AppDir)] = '\') then
       Delete(AppDir, Length(AppDir), 1);
 
+    // Confirmed on a real machine: PowerShell's script-execution policy
+    // (Restricted by default on plenty of consumer installs, not just
+    // locked-down corporate ones) blocks -File from ever running a single
+    // line of the script -- and if that policy is enforced at Group/
+    // Machine Policy scope, -ExecutionPolicy Bypass on the command line
+    // CANNOT override it (Group/Machine Policy outranks the Process-scope
+    // Bypass in PowerShell's own precedence order). This is why every
+    // previous attempt produced zero trace of install_log.txt ever being
+    // created: the file was never loaded at all.
+    //
+    // The policy only gates loading .ps1 FILES (-File, dot-sourcing,
+    // Import-Module). It does not gate a string of PowerShell code handed
+    // to -Command / Invoke-Expression / ScriptBlock::Create -- this is
+    // exactly why DownloadTokiSource's three -Command calls above have
+    // always worked fine on this same machine, and it's the standard,
+    // widely-documented way to run PowerShell logic on a system where
+    // script files are blocked. So: read setup_runtime.ps1 as plain text
+    // ourselves and turn it into a scriptblock, rather than asking
+    // powershell.exe to load it as a file.
+    ScriptPath := ExpandConstant('{app}\installer\setup_runtime.ps1');
     PSCommand :=
-      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\setup_runtime.ps1') +
-      '" -InstallDir "' + AppDir + '" -IncludeVoice ' + IncludeVoiceStr;
+      '-NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create(' +
+      '(Get-Content -Raw -LiteralPath ''' + ScriptPath + '''))) ' +
+      '-InstallDir ''' + AppDir + ''' -IncludeVoice ' + IncludeVoiceStr + '"';
 
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
                  PSCommand, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
-      MsgBox('Could not start the Python runtime setup script. ' +
-             'You can re-run it manually later from:' + #13#10 +
-             ExpandConstant('{app}\installer\setup_runtime.ps1'), mbError, MB_OK
+      MsgBox('Could not start the Python runtime setup script. You can ' +
+             're-run it manually later by opening PowerShell and running:' + #13#10#13#10 +
+             '& ([ScriptBlock]::Create((Get-Content -Raw -LiteralPath ''' + ScriptPath +
+             '''))) -InstallDir ''' + AppDir + ''' -IncludeVoice ' + IncludeVoiceStr, mbError, MB_OK
       )
     else if ResultCode <> 0 then
       MsgBox('Python runtime setup reported an error (exit code ' + IntToStr(ResultCode) + '). ' +

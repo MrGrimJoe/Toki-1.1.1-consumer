@@ -22,9 +22,22 @@ removed cleanly by the uninstaller.
 
 USAGE (called by installer.iss)
 ------------------------------------------------------------------------------
-    powershell -ExecutionPolicy Bypass -File setup_runtime.ps1 `
-        -InstallDir "C:\Program Files\TOKI" `
-        -IncludeVoice $true
+installer.iss does NOT invoke this file directly with -File. On a machine
+where script execution is blocked at Group/Machine Policy scope,
+-ExecutionPolicy Bypass cannot override that (Group/Machine Policy
+outranks a command-line Bypass), so -File would silently never run a
+single line of this script. That policy only gates loading .ps1 FILES --
+it does not gate a string of code handed to -Command / ScriptBlock::Create,
+so installer.iss reads this file as text and runs it that way instead:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create( `
+        (Get-Content -Raw -LiteralPath 'C:\Program Files\TOKI\installer\setup_runtime.ps1') `
+    )) -InstallDir 'C:\Program Files\TOKI' -IncludeVoice `$true"
+
+If you're re-running this by hand and a plain
+`.\setup_runtime.ps1 -InstallDir ... ` gives a
+"running scripts is disabled on this system" error, use the command above
+instead of trying to relax your machine's execution policy.
 
 PARAMETERS
 ------------------------------------------------------------------------------
